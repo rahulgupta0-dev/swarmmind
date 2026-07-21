@@ -1,0 +1,93 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.whl
+.eggs/
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.coverage.*
+coverage.xml
+
+# Root-level scratch test files (development artifacts, not part of the package)
+test_*.py
+!tests/test_*.py
+
+# Runtime data
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Demo output
+demo_output/
+
+# ChromaDB
+chroma_db/
+chroma/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
+
+# mypy
+.mypy_cache/
+
+# ruff
+.ruff_cache/
+
+# Type stubs
+*.pyi
+
+# Temp files
+*.tmp
+*.bak
+*.orig
+*~
+
+# Node (if used for tooling)
+node_modules/
+
+# Build artifacts
+*.manifest
+*.spec
+.tako/
