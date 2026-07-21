@@ -33,6 +33,11 @@ WORKER_SYSTEM_PROMPTS: dict[str, str] = {
         "technical context. Analyse the code, explain its purpose, and identify patterns, "
         "bugs, or areas for improvement."
     ),
+    "vision": (
+        "You are a vision-language research assistant. You have access to user-uploaded images "
+        "and contextual queries. Analyze the provided image deeply to answer the query, "
+        "extracting text, describing UI elements, or summarizing visual data."
+    ),
 }
 
 
@@ -82,10 +87,23 @@ class Worker:
             "- Gaps or uncertainties"
         )
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ]
+        if worker_type == "vision" and additional_context.startswith("data:image"):
+            # Pass image directly as part of a multimodal message
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_message},
+                        {"type": "image_url", "image_url": {"url": additional_context}}
+                    ]
+                }
+            ]
+        else:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ]
 
         try:
             response = await self._client.chat_completion(

@@ -114,6 +114,7 @@ class Orchestrator:
         query: str,
         project_context: Optional[dict[str, Any]] = None,
         web_search_enabled: bool = True,
+        vision_base64: Optional[str] = None,
         progress_callback: Optional[Callable[[str, dict[str, Any]], None]] = None,
     ) -> dict[str, Any]:
         """Execute the full research pipeline.
@@ -250,6 +251,9 @@ class Orchestrator:
                         )
                 except Exception as exc:
                     logger.warning("Web search failed: %s", exc)
+
+            elif worker_type == "vision" and vision_base64:
+                additional = vision_base64
 
             try:
                 result = await asyncio.wait_for(

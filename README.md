@@ -1,11 +1,16 @@
-# 🐝 SwarmMind — Multi-Agent AI Research on AMD Lemonade
+# 🐝 SwarmMind — Multi-Agent AI Research on AMD Lemonade 🍋
 
 > **AMD Lemonade Developer Challenge 2026 Submission**  
-> A local-first, multi-agent research swarm powered entirely by AMD Lemonade
+> A local-first, multi-agent research swarm **Powered by Lemonade Omni Models**  
+> *Built as a deep ecosystem contribution to push local, multi-agent AI forward on AMD hardware.*
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![AMD Lemonade](https://img.shields.io/badge/AMD-Lemonade-ED1C24.svg)](https://github.com/lemonade-sdk/lemonade)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+---
+
+### 🎥 [Watch the SwarmMind Demo Video Here!](https://arorlgyiqvelbjrtshjn.supabase.co/storage/v1/object/public/pranav/1784638692_swarmmind_demo_1080p.mp4)
 
 ---
 
@@ -48,9 +53,10 @@ User Query
 - **🌐 Web Search** — DuckDuckGo integration for real-time web results
 - **⚡ Parallel or Sequential Execution** — Choose parallel (fast) or sequential (low-RAM) worker execution
 - **🖥️ AMD Hardware Detection** — Auto-detects Ryzen AI NPU, ROCm GPU, and recommends optimal backends
+- **🎨 Lemonade Omni Models** — Native multimodal processing! Leverages Qwen3.6-35B-A3B for Vision, Flux for Diagrams, and Kokoro for TTS narration.
 - **📊 Structured Reports** — Executive summary, sections, contradictions, follow-up questions
 - **📤 Export** — Markdown and HTML report export
-- **🎨 Professional UI** — Dark glassmorphism design with 3-panel layout
+- **🖥️ Professional UI** — Dark glassmorphism design with 3-panel layout
 
 ---
 

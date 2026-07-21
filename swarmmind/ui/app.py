@@ -174,12 +174,13 @@ st.markdown(
         padding: 1.25rem 1.5rem;
         box-shadow: 0 8px 32px rgba(0,0,0,0.4);
         min-height: 75vh;
-        transition: box-shadow 0.3s, transform 0.3s, border-color 0.3s;
+        transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.4s ease, border-color 0.4s ease;
         position: relative;
     }
     div[data-testid="column"] > div:first-child > div:first-child:hover {
-        box-shadow: 0 12px 48px rgba(0,0,0,0.6);
-        border-color: rgba(255, 255, 255, 0.15);
+        transform: translateY(-6px) scale(1.01);
+        box-shadow: 0 20px 48px rgba(0,0,0,0.7), 0 0 15px rgba(139, 92, 246, 0.3);
+        border-color: rgba(139, 92, 246, 0.4);
     }
     
     /* Neon glowing left accent borders per column */

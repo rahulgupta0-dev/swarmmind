@@ -19,6 +19,7 @@ _WORKER_ICONS: dict[str, str] = {
     "web": "globe",
     "analysis": "chart-line",
     "code": "code",
+    "vision": "image",
 }
 
 _STATUS_SYMBOLS: dict[str, str] = {
@@ -33,6 +34,7 @@ _WORKER_LABELS: dict[str, str] = {
     "web": "Web",
     "analysis": "Analysis",
     "code": "Code",
+    "vision": "Vision",
 }
 
 
@@ -62,6 +64,14 @@ def render_chat_panel(st: Any, state: dict[str, Any]) -> None:
         height=100,
     )
 
+    vision_image = st.file_uploader(
+        "Upload an image for Vision worker (optional)",
+        type=["png", "jpg", "jpeg"],
+        key="chat_vision_upload"
+    )
+    if vision_image is not None:
+        st.image(vision_image, caption="Uploaded Image", width=200)
+
     col1, col2 = st.columns([1, 3])
     with col1:
         launch = st.button(
@@ -83,8 +93,8 @@ def render_chat_panel(st: Any, state: dict[str, Any]) -> None:
         )
         worker_types = st.multiselect(
             "Worker Types",
-            ["RAG", "Web", "Analysis", "Code"],
-            default=["RAG", "Web", "Analysis"],
+            ["RAG", "Web", "Analysis", "Code", "Vision"],
+            default=["RAG", "Web", "Analysis", "Vision"],
             key="chat_worker_types",
         )
         model = st.selectbox(
@@ -98,7 +108,13 @@ def render_chat_panel(st: Any, state: dict[str, Any]) -> None:
     # Execute swarm
     # ------------------------------------------------------------------
     if launch and query.strip():
-        _run_swarm(st, state, query.strip(), web_search, model)
+        import base64
+        vision_base64 = None
+        if vision_image is not None:
+            image_bytes = vision_image.getvalue()
+            vision_base64 = f"data:{vision_image.type};base64," + base64.b64encode(image_bytes).decode('utf-8')
+        
+        _run_swarm(st, state, query.strip(), web_search, model, vision_base64)
 
     # ------------------------------------------------------------------
     # Display last report with action buttons
@@ -146,6 +162,7 @@ def _run_swarm(
     query: str,
     web_search: bool,
     model: str,
+    vision_base64: str | None = None,
 ) -> None:
     """Execute the orchestrator with real-time progress updates."""
     config_obj = state["config"]
@@ -260,6 +277,7 @@ def _run_swarm(
                             query=query,
                             project_context=project_ctx,
                             web_search_enabled=web_search,
+                            vision_base64=vision_base64,
                             progress_callback=progress_callback,
                         )
                     )

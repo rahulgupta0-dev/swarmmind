@@ -1,7 +1,7 @@
-# 🐝 SwarmMind — Judge Setup Guide
+# 🐝 SwarmMind — Setup & Installation Guide
 
 > **AMD Lemonade Developer Challenge 2026 Submission**  
-> Quick start guide for judges evaluating SwarmMind
+> Quick start guide for developers and community members setting up SwarmMind
 
 ---
 
@@ -30,21 +30,25 @@ lemonade-server start
 curl http://localhost:13305/v1/health
 ```
 
-### Step 2: Clone and Install SwarmMind
+### Step 2: Install SwarmMind
 
+We have provided a one-click installer to automatically handle virtual environments, dependencies, and desktop shortcuts!
+
+**Linux / macOS:**
 ```bash
-# Clone the repository
 git clone https://github.com/rahulgupta0-dev/swarmmind.git
 cd swarmmind
-
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
-
-# Install in editable mode with dev dependencies
-pip install -e ".[dev]"
+./install.sh
 ```
+
+**Windows:**
+```bat
+git clone https://github.com/rahulgupta0-dev/swarmmind.git
+cd swarmmind
+install.bat
+```
+
+*(Alternatively, you can manually create a virtual environment and run `pip install -e ".[dev]"`)*
 
 ### Step 3: Verify Installation
 
@@ -327,14 +331,15 @@ python -m pytest tests/ -v -m "not slow"
 
 ---
 
-## 🎯 What to Look For
+## 🎯 Key Highlights
 
 ### Architecture Quality
 
 - ✅ Clean separation of concerns (core/, ui/, rag/, lemonade/)
 - ✅ Async-first design with proper error handling
 - ✅ Hardware auto-detection and backend routing
-- ✅ Modular worker system (RAG, Web, Analysis, Code)
+- ✅ Modular worker system (RAG, Web, Analysis, Code, **Vision**)
+- ✅ **New:** Native Multimodal Vision processing via Qwen3.6-35B-A3B
 
 ### Code Quality
 
@@ -355,7 +360,7 @@ python -m pytest tests/ -v -m "not slow"
 - ✅ Clear README with architecture diagram
 - ✅ CLI reference with all 11 commands
 - ✅ Configuration guide
-- ✅ This judge setup guide
+- ✅ This comprehensive setup guide
 
 ---
 
