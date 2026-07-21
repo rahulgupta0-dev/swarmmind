@@ -20,28 +20,26 @@ SwarmMind is a **multi-agent AI research assistant** that decomposes complex res
 
 ### The Swarm Architecture
 
-```
-User Query
-    │
-    ▼
-┌─────────────┐
-│  Conductor  │  ← Decomposes query into 2-5 parallel tasks
-│  (LLM)      │    using AMD Lemonade chat/completions
-└──────┬──────┘
-       │
-   ┌───┴────────────────────┐
-   ▼         ▼              ▼
-┌──────┐  ┌──────┐  ┌──────────┐
-│  RAG │  │ Web  │  │ Analysis │  ← Workers run in parallel
-│Worker│  │Worker│  │  Worker  │    (asyncio.gather)
-└──┬───┘  └──┬───┘  └────┬─────┘
-   └──────────┴───────────┘
-              │
-              ▼
-        ┌──────────┐
-        │Synthesis │  ← Merges all outputs into
-        │  (LLM)   │    structured report + follow-ups
-        └──────────┘
+```mermaid
+graph TD
+    A[User Query] --> B["Conductor (LLM)<br/>Decomposes query using Lemonade"]
+    
+    B --> C["RAG Worker"]
+    B --> D["Web Worker"]
+    B --> E["Analysis Worker"]
+    B --> F["Vision Worker"]
+    
+    C --> G["Synthesis (LLM)<br/>Merges outputs into structured report"]
+    D --> G
+    E --> G
+    F --> G
+    
+    style B fill:#1e1e2e,stroke:#8b5cf6,stroke-width:2px,color:#fff
+    style C fill:#1e1e2e,stroke:#3b82f6,stroke-width:2px,color:#fff
+    style D fill:#1e1e2e,stroke:#3b82f6,stroke-width:2px,color:#fff
+    style E fill:#1e1e2e,stroke:#3b82f6,stroke-width:2px,color:#fff
+    style F fill:#1e1e2e,stroke:#3b82f6,stroke-width:2px,color:#fff
+    style G fill:#1e1e2e,stroke:#10b981,stroke-width:2px,color:#fff
 ```
 
 ---
