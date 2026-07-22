@@ -11,6 +11,7 @@
 ---
 
 ### 🎥 [Watch the SwarmMind Demo Video Here!](https://arorlgyiqvelbjrtshjn.supabase.co/storage/v1/object/public/pranav/1784638692_swarmmind_demo_1080p.mp4)
+**🌐 Read this in your language:** [简体中文](docs/README.cn.md) | [हिन्दी](docs/README.hi.md) | [日本語](docs/README.ja.md) | [Français](docs/README.fr.md)
 
 ---
 
