@@ -15,7 +15,7 @@ class TestConfig:
     """Configuration loading and defaults."""
 
     def test_version(self) -> None:
-        assert __version__ == "0.1.0"
+        assert __version__ == "0.2.0"
 
     def test_default_config(self) -> None:
         """Config should load with sensible defaults (user config is isolated by conftest)."""
