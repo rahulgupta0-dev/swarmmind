@@ -145,18 +145,19 @@ swarmmind/
 
 ---
 
-## 📝 AMD Lemonade Integration
+## 📝 AMD Lemonade Integration (Lemonade v11.5.0 Ready)
 
-SwarmMind uses the following Lemonade endpoints:
+SwarmMind integrates with the following Lemonade endpoints:
 
 | Endpoint | Purpose |
 |---|---|
-| GET /v1/health | Connection health check |
-| POST /v1/chat/completions | All LLM inference (conductor, workers, synthesis) |
-| POST /v1/load | Pre-load conductor model |
-| POST /v1/embeddings | RAG document embedding |
-| GET /v1/system-info | AMD hardware detection (NPU/GPU/CPU) |
-| GET /v1/stats | Token throughput metrics |
+| `GET /v1/health` | Connection health check with `is_busy` & `is_streaming` state parsing and `403` origin diagnostics |
+| `POST /v1/chat/completions` | All LLM inference (conductor, workers, synthesis, Lemonade Router traces) |
+| `POST /v1/classify` | Lemonade Router ONNX text-classification & fast sub-task routing |
+| `POST /v1/load` | Pre-load conductor and worker models |
+| `POST /v1/embeddings` | RAG document embedding |
+| `GET /v1/system-info` | AMD hardware detection (NPU/GPU/CPU) |
+| `GET /v1/stats` | Token throughput metrics |
 
 ---
 

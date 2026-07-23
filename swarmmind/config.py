@@ -58,6 +58,7 @@ class ModelsConfig(BaseModel):
     embeddings: str = "nomic-embed-text-v1-GGUF"
     image: str = "Flux-2-Klein-4B"
     tts: str = "kokoro-v1"
+    router: str = "routing.router"
 
     # Per-role context window in tokens.  Defaults to 128K for LLM roles.
     # 128K preserves Qwen3.6's thinking capabilities (~262K native) while
@@ -67,6 +68,7 @@ class ModelsConfig(BaseModel):
             "conductor": 131072,
             "worker": 131072,
             "embeddings": 8192,
+            "router": 8192,
         },
     )
 
@@ -78,8 +80,15 @@ class ModelsConfig(BaseModel):
             "embeddings": None,
             "image": None,
             "tts": None,
+            "router": None,
         },
     )
+
+    def is_router_model(self, model_name: str) -> bool:
+        """Check if a model name refers to a Lemonade Router model (e.g. *.router)."""
+        if not model_name:
+            return False
+        return model_name.endswith(".router") or "router" in model_name.lower()
 
 
 class ExecutionConfig(BaseModel):

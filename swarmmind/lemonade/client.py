@@ -212,20 +212,112 @@ class LemonadeClient:
         return resp.content
 
     # ------------------------------------------------------------------
+    # Classification (Lemonade Router / ONNX text classifier)
+    # ------------------------------------------------------------------
+
+    async def classify(
+        self,
+        input_text: str | list[str],
+        model: str = "routing.router",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """POST /v1/classify — text classification via Lemonade Router/ONNX model.
+
+        Args:
+            input_text: Text string or list of text strings to classify.
+            model: Model name (e.g. ``routing.router`` or encoder classifier model).
+
+        Returns:
+            Parsed JSON classification results.
+        """
+        body = {
+            "model": model,
+            "text": input_text,
+            **kwargs,
+        }
+        resp = await self._request("POST", "/v1/classify", json=body)
+        return resp.json()
+
+    # ------------------------------------------------------------------
     # System / Health / Models
     # ------------------------------------------------------------------
 
     async def health_check(self) -> dict[str, Any]:
         """Check if the Lemonade server is reachable.
 
-        Returns ``{"status": "ok"}`` on success, or
-        ``{"status": "error", "detail": "..."}`` on failure.
+        Returns status dict including models, is_busy, and is_streaming flags
+        introduced in Lemonade v11.5.0. On 403 Forbidden, returns status='forbidden'
+        with clear diagnostic guidance regarding LEMONADE_ALLOWED_ORIGINS.
         """
         try:
             resp = await self._request("GET", "/v1/health")
-            return {"status": "ok", "code": resp.status_code}
+            data = {}
+            try:
+                data = resp.json()
+            except Exception:
+                pass
+
+            models = data.get("models", []) if isinstance(data, dict) else []
+            is_busy = False
+            is_streaming = False
+
+            if isinstance(data, dict):
+                if "is_busy" in data:
+                    is_busy = bool(data["is_busy"])
+                elif isinstance(models, list):
+                    is_busy = any(bool(m.get("is_busy", False)) for m in models if isinstance(m, dict))
+
+                if "is_streaming" in data:
+                    is_streaming = bool(data["is_streaming"])
+                elif isinstance(models, list):
+                    is_streaming = any(bool(m.get("is_streaming", False)) for m in models if isinstance(m, dict))
+
+            return {
+                "status": "ok",
+                "code": resp.status_code,
+                "models": models,
+                "is_busy": is_busy,
+                "is_streaming": is_streaming,
+                "detail": data,
+            }
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403:
+                return {
+                    "status": "forbidden",
+                    "code": 403,
+                    "detail": (
+                        "403 Forbidden: Origin rejected by Lemonade server. "
+                        "Lemonade v11.5+ requires non-loopback origins to be listed in LEMONADE_ALLOWED_ORIGINS."
+                    ),
+                }
+            return {"status": "error", "code": exc.response.status_code, "detail": str(exc)}
         except Exception as exc:
             return {"status": "error", "detail": str(exc)}
+
+    async def get_model_busy_status(self, model_name: Optional[str] = None) -> dict[str, bool]:
+        """Inspect busy and streaming state for a given model or overall server.
+
+        Returns dict ``{"is_busy": bool, "is_streaming": bool}``.
+        """
+        health = await self.health_check()
+        if health.get("status") != "ok":
+            return {"is_busy": False, "is_streaming": False}
+
+        if model_name:
+            models = health.get("models", [])
+            if isinstance(models, list):
+                for m in models:
+                    if isinstance(m, dict) and m.get("name") == model_name:
+                        return {
+                            "is_busy": bool(m.get("is_busy", False)),
+                            "is_streaming": bool(m.get("is_streaming", False)),
+                        }
+            return {"is_busy": False, "is_streaming": False}
+
+        return {
+            "is_busy": bool(health.get("is_busy", False)),
+            "is_streaming": bool(health.get("is_streaming", False)),
+        }
 
     async def load_model(self, model_name: str) -> dict[str, Any]:
         """Request the server to load a specific model."""

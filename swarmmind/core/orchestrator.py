@@ -134,6 +134,11 @@ class Orchestrator:
         # ------------------------------------------------------------------
         self._emit(progress_callback, "preflight", {"message": "Checking Lemonade connection..."})
         health = await self._client.health_check()
+        if health.get("status") == "forbidden" or health.get("code") == 403:
+            raise PermissionError(
+                f"Lemonade origin rejected (403 Forbidden) at {self._config.get_lemonade_base_url()}: "
+                f"{health.get('detail', 'Origin not allowed. Set LEMONADE_ALLOWED_ORIGINS.')}"
+            )
         if health.get("status") != "ok":
             raise ConnectionError(
                 f"Cannot reach Lemonade at {self._config.get_lemonade_base_url()}: "

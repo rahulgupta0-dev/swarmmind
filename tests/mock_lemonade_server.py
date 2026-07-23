@@ -86,6 +86,8 @@ class MockHandler(BaseHTTPRequestHandler):
             self._send_json(200, {})
             return
 
+        if method == "POST" and path == "/v1/classify":
+            return self._handle_classify()
         if method == "GET" and path == "/v1/health":
             return self._handle_health()
         if method == "GET" and path == "/v1/models":
@@ -121,7 +123,27 @@ class MockHandler(BaseHTTPRequestHandler):
     # ---- Endpoint implementations ----
 
     def _handle_health(self) -> None:
-        self._send_json(200, {"status": "ok"})
+        self._send_json(200, {
+            "status": "ok",
+            "is_busy": False,
+            "is_streaming": False,
+            "models": [
+                {"name": "Qwen3.6-35B-A3B-GGUF", "is_busy": False, "is_streaming": False},
+                {"name": "Gemma-4-12B-it", "is_busy": False, "is_streaming": False},
+            ],
+        })
+
+    def _handle_classify(self) -> None:
+        body = self._read_body()
+        model = body.get("model", "routing.router")
+        text = body.get("text", "")
+        self._send_json(200, {
+            "model": model,
+            "results": [
+                {"label": "rag", "score": 0.85},
+                {"label": "web", "score": 0.15},
+            ],
+        })
 
     def _handle_list_models(self) -> None:
         self._send_json(200, {
