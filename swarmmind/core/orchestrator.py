@@ -115,6 +115,7 @@ class Orchestrator:
         project_context: Optional[dict[str, Any]] = None,
         web_search_enabled: bool = True,
         vision_base64: Optional[str] = None,
+        conversation_history: Optional[list[dict[str, Any]]] = None,
         progress_callback: Optional[Callable[[str, dict[str, Any]], None]] = None,
     ) -> dict[str, Any]:
         """Execute the full research pipeline.
@@ -123,6 +124,10 @@ class Orchestrator:
         query: The user's research question.
         project_context: Optional project metadata for context.
         web_search_enabled: Whether to allow web search workers.
+        vision_base64: Optional base64-encoded image for the vision worker.
+        conversation_history: Optional list of prior turn dicts with
+        ``query`` and ``report`` keys, fed to conductor and synthesis
+        so follow-ups can reference earlier findings.
         progress_callback: Optional callback invoked at each phase
         with ``(status, detail_dict)``.
 
@@ -198,7 +203,11 @@ class Orchestrator:
         # 2. Conductor
         # ------------------------------------------------------------------
         self._emit(progress_callback, "conducting", {"message": "Decomposing query..."})
-        tasks = await self._conductor.decompose_query(query, project_context or {})
+        tasks = await self._conductor.decompose_query(
+            query,
+            project_context or {},
+            conversation_history=conversation_history,
+        )
 
         # Filter out web workers if disabled
         if not web_search_enabled:
@@ -312,7 +321,9 @@ class Orchestrator:
         # 4. Synthesis
         # ------------------------------------------------------------------
         self._emit(progress_callback, "synthesising", {"message": "Synthesising results..."})
-        report = await self._synthesis.synthesize(worker_outputs, query)
+        report = await self._synthesis.synthesize(
+            worker_outputs, query, conversation_history=conversation_history,
+        )
 
         self._emit(progress_callback, "done", {"message": "Research complete."})
 

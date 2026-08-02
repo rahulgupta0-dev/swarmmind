@@ -27,7 +27,7 @@ class TestAllModuleImports:
     def test_core_imports(self) -> None:
         """Core modules that have no Streamlit dependency."""
         from swarmmind import __version__
-        assert __version__ == "0.2.0"
+        assert __version__ == "0.3.0"
 
         from swarmmind.config import Config
         assert Config is not None

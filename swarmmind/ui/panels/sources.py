@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
+import logging
+import threading
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from swarmmind.data.models import Project, Source
 from swarmmind.ui.components.icons import icon_html
@@ -313,15 +316,110 @@ def _handle_add_source(
 
     try:
         from swarmmind.core.async_utils import run_async
-        run_async(db.create_source(src))
+        saved_src = run_async(db.create_source(src))
+        source_id = saved_src.id
+        db_path = db._db_path
+        config_obj = state.get("config")
+
         st.markdown(
             '<div class="amd-banner success"><span class="icon"><i class="ph-bold ph-check-circle"></i></span>'
-            '<span>Source added!</span></div>',
+            '<span>Source added — ingesting into knowledge base…</span></div>',
             unsafe_allow_html=True,
         )
+
+        # Fire background ingestion so the UI stays responsive
+        t = threading.Thread(
+            target=_ingest_source_background,
+            args=(db_path, source_id, db_type, source_input.strip(), config_obj),
+            daemon=True,
+        )
+        t.start()
+
         st.rerun()
     except Exception as exc:
         st.error(f"Failed to add source: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Background ingestion (runs in a daemon thread so the UI stays responsive)
+# ---------------------------------------------------------------------------
+
+
+def _ingest_source_background(
+    db_path: str, source_id: str, db_type: str,
+    source_input: str, config_obj: Any,
+) -> None:
+    """Run Pipeline.process_source() in a background thread."""
+    import asyncio
+
+    async def _do() -> None:
+        import asyncio
+        import os
+        from pathlib import Path
+        from swarmmind.data.database import Database
+        from swarmmind.rag.chroma_store import ChromaStore
+        from swarmmind.rag.pipeline import Pipeline
+
+        db = Database(db_path)
+        try:
+            await db.connect()
+            src_row = await db.get_source(source_id)
+            if src_row is None:
+                logger.warning("Source %s not found in DB", source_id)
+                return
+            proj_id = src_row.project_id
+
+            await db.update_source_status(source_id, "processing")
+            logger.info("Ingesting source %s (type=%s) into project %s",
+                        source_id, db_type, proj_id)
+
+            # Pasted text: pass bytes so Pipeline writes a temp .txt and
+            # MarkItDown can convert it (a bare str would be treated as a
+            # file path and fail). Real file paths pass through unchanged.
+            ingest_input: str | bytes = source_input
+            if db_type == "text" and not os.path.isfile(source_input):
+                ingest_input = source_input.encode("utf-8")
+
+            chroma_dir = str(Path.home() / ".swarmmind" / "chroma_db")
+            chroma_store = ChromaStore(chroma_dir)
+            pipeline = Pipeline(config_obj, chroma_store)
+
+            result = await pipeline.process_source(
+                source_type=db_type,
+                source_input=ingest_input,
+                source_id=source_id,
+                project_id=proj_id,
+            )
+
+            status = result.get("status", "error")
+            await db.update_source_status(
+                source_id, status,
+                char_count=result.get("char_count", 0),
+                chunk_count=result.get("chunk_count", 0),
+                error_message=result.get("error"),
+            )
+            logger.info("Ingestion %s complete: %s (%d chunks)",
+                        source_id, status, result.get("chunk_count", 0))
+        except Exception as exc:
+            logger.error("Bg ingestion failed for %s: %s", source_id, exc)
+            try:
+                # Reuse the same connection (WAL-safe; avoids a second
+                # Database object and a second lock acquisition).
+                await db.update_source_status(
+                    source_id, "error", error_message=str(exc),
+                )
+            except Exception:
+                pass
+        finally:
+            try:
+                await db.close()
+            except Exception:
+                pass
+
+    try:
+        asyncio.run(_do())
+    except Exception as exc:
+        logger.error("Background ingestion thread failed for %s: %s", source_id, exc)
 
 
 # ---------------------------------------------------------------------------

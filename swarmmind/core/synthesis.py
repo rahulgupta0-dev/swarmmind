@@ -55,12 +55,15 @@ class Synthesis:
         self,
         worker_outputs: list[dict[str, Any]],
         original_query: str,
+        conversation_history: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Combine *worker_outputs* into a single structured report.
 
         Args:
             worker_outputs: A list of dicts as returned by ``Worker.run()``.
             original_query: The user's original research query.
+            conversation_history: Optional prior turns so the report can
+                reference earlier findings (multi-turn support).
 
         Returns:
             A dict with keys ``title``, ``executive_summary``, ``sections``,
@@ -68,7 +71,8 @@ class Synthesis:
         """
         messages = [
             {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},
-            {"role": "user", "content": self._build_user_message(worker_outputs, original_query)},
+            {"role": "user", "content": self._build_user_message(
+                worker_outputs, original_query, conversation_history)},
         ]
 
         try:
@@ -91,8 +95,27 @@ class Synthesis:
         self,
         worker_outputs: list[dict[str, Any]],
         original_query: str,
+        conversation_history: list[dict[str, Any]] | None = None,
     ) -> str:
-        parts = [f"Original Query: {original_query}\n", "--- Worker Outputs ---\n"]
+        parts = [f"Original Query: {original_query}"]
+
+        if conversation_history:
+            hist_lines = ["\n--- Prior Conversation (for continuity) ---"]
+            for i, turn in enumerate(conversation_history, 1):
+                prev_q = turn.get("query", "")
+                prev_rep = turn.get("report")
+                if isinstance(prev_rep, dict):
+                    prev_sum = prev_rep.get("executive_summary", "")[:500]
+                    prev_conc = prev_rep.get("conclusion", "")[:500]
+                    hist_lines.append(f"Turn {i}: Q: {prev_q}")
+                    hist_lines.append(f"  Summary: {prev_sum}")
+                    hist_lines.append(f"  Conclusion: {prev_conc}")
+                else:
+                    hist_lines.append(f"Turn {i}: Q: {prev_q} (no report)")
+            parts.append("\n".join(hist_lines))
+
+        parts.append("")
+        parts.append("--- Worker Outputs ---\n")
 
         for i, wo in enumerate(worker_outputs, 1):
             parts.append(f"Worker {i}:")

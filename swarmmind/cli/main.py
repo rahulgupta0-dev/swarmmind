@@ -330,20 +330,92 @@ def list_reports(project_id: str) -> None:
     asyncio.run(_run())
 
 
-@report.command()
+def _load_report(conversation_id: str) -> dict:
+    """Load a stored report dict for a conversation id (raises if missing)."""
+    db = _get_db()
+    try:
+        asyncio.run(db.init_db())
+        conv = asyncio.run(db.get_conversation(conversation_id))
+        if conv is None:
+            console.print(f"[red]No conversation found with id '{conversation_id}'. "
+                          "Use `swarmmind report list <project-id>`.[/red]")
+            raise SystemExit(1)
+        if not conv.report_json:
+            console.print("[yellow]This conversation has no stored report.[/yellow]")
+            raise SystemExit(1)
+        try:
+            return json.loads(conv.report_json)
+        except json.JSONDecodeError:
+            console.print("[yellow]Stored report JSON is corrupt.[/yellow]")
+            raise SystemExit(1)
+    finally:
+        asyncio.run(db.close())
+
+
+def _render_report(report: dict) -> None:
+    """Print a stored report to the console (rich)."""
+    console.print(Panel.fit(f"[bold]{report.get('title', 'Research Report')}", border_style="blue"))
+    if report.get("executive_summary"):
+        console.print("\n[bold cyan]Executive Summary[/bold cyan]")
+        console.print(Markdown(report["executive_summary"]))
+    for section in report.get("sections", []):
+        console.print(f"\n[bold cyan]{section.get('heading', 'Section')}[/bold cyan]")
+        console.print(Markdown(section.get("content", "")))
+        if section.get("sources"):
+            console.print("[dim]Sources:[/dim] " + ", ".join(section["sources"]))
+    if report.get("conclusion"):
+        console.print("\n[bold cyan]Conclusion[/bold cyan]")
+        console.print(Markdown(report["conclusion"]))
+    if report.get("contradictions"):
+        console.print("\n[bold yellow]Contradictions[/bold yellow]")
+        for c in report["contradictions"]:
+            console.print(f"- {c}")
+    if report.get("follow_up_questions"):
+        console.print("\n[bold magenta]Follow-up Questions[/bold magenta]")
+        for q in report["follow_up_questions"]:
+            console.print(f"- {q}")
+
+
+@report.command(name="show")
 @click.argument("conversation-id")
 def show_report(conversation_id: str) -> None:
-    """Show a conversation/report detail."""
-    # For Phase 1 this is a placeholder — full report storage in Phase 2
-    console.print("[yellow]Report detail view coming in Phase 2.[/yellow]")
+    """Show a stored conversation/report detail."""
+    report_dict = _load_report(conversation_id)
+    _render_report(report_dict)
 
 
 @report.command()
 @click.argument("conversation-id")
-@click.argument("output-path")
+@click.argument("output-path", type=click.Path(dir_okay=False))
 def export(conversation_id: str, output_path: str) -> None:
-    """Export a report to a file."""
-    console.print("[yellow]Report export coming in Phase 2.[/yellow]")
+    """Export a stored report to a Markdown file."""
+    report_dict = _load_report(conversation_id)
+
+    lines = [
+        f"# {report_dict.get('title', 'Research Report')}",
+        "",
+    ]
+    if report_dict.get("executive_summary"):
+        lines += ["## Executive Summary", "", report_dict["executive_summary"], ""]
+    for section in report_dict.get("sections", []):
+        lines += [f"## {section.get('heading', 'Section')}", "", section.get("content", ""), ""]
+        if section.get("sources"):
+            lines += ["**Sources:** " + ", ".join(section["sources"]), ""]
+    if report_dict.get("conclusion"):
+        lines += ["## Conclusion", "", report_dict["conclusion"], ""]
+    if report_dict.get("contradictions"):
+        lines += ["## Contradictions", ""]
+        lines += [f"- {c}" for c in report_dict["contradictions"]]
+        lines.append("")
+    if report_dict.get("follow_up_questions"):
+        lines += ["## Follow-up Questions", ""]
+        lines += [f"- {q}" for q in report_dict["follow_up_questions"]]
+        lines.append("")
+
+    md = "\n".join(lines).strip() + "\n"
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(md)
+    console.print(f"[green]Report exported to {output_path}[/green]")
 
 
 # -----------------------------------------------------------------------

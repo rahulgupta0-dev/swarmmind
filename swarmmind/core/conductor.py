@@ -55,6 +55,7 @@ class Conductor:
         self,
         query: str,
         project_context: dict[str, Any] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, str]]:
         """Break *query* into a list of worker-task dicts.
 
@@ -65,7 +66,8 @@ class Conductor:
         """
         messages = [
             {"role": "system", "content": CONDUCTOR_SYSTEM_PROMPT},
-            {"role": "user", "content": self._build_user_message(query, project_context)},
+            {"role": "user", "content": self._build_user_message(
+                query, project_context, conversation_history)},
         ]
 
         try:
@@ -88,10 +90,31 @@ class Conductor:
         self,
         query: str,
         project_context: dict[str, Any] | None,
+        conversation_history: list[dict[str, Any]] | None = None,
     ) -> str:
         parts = [f"Research Query: {query}"]
         if project_context:
             parts.append(f"\nProject Context:\n{json.dumps(project_context, indent=2)}")
+        if conversation_history:
+            hist_lines = ["\nPrevious Conversation (prior turns, oldest first):"]
+            for i, turn in enumerate(conversation_history, 1):
+                prev_q = turn.get("query", "")
+                prev_rep = turn.get("report")
+                if isinstance(prev_rep, dict):
+                    prev_title = prev_rep.get("title", "")
+                    prev_sum = prev_rep.get("executive_summary", "")[:600]
+                    prev_sections = [
+                        s.get("content", "")[:400]
+                        for s in prev_rep.get("sections", [])
+                    ]
+                    hist_lines.append(f"  Turn {i} query: {prev_q}")
+                    hist_lines.append(f"  Turn {i} report title: {prev_title}")
+                    hist_lines.append(f"  Turn {i} executive summary: {prev_sum}")
+                    if prev_sections:
+                        hist_lines.append(f"  Turn {i} key sections: {' '.join(prev_sections)[:600]}")
+                else:
+                    hist_lines.append(f"  Turn {i} query: {prev_q} (no report)")
+            parts.append("\n".join(hist_lines))
         return "\n".join(parts)
 
     def _parse_response(self, content: str) -> list[dict[str, str]]:

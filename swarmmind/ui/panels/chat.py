@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from typing import Any
 
@@ -52,6 +53,9 @@ def render_chat_panel(st: Any, state: dict[str, Any]) -> None:
                config, client, chroma, etc.
     """
     st.markdown(f"### {icon_html('chats-circle')} Research Query", unsafe_allow_html=True)
+
+    # Load persisted conversations from the DB (once per project selection)
+    _load_past_conversations(st, state)
 
     # ------------------------------------------------------------------
     # Query input section
@@ -149,6 +153,65 @@ def render_chat_panel(st: Any, state: dict[str, Any]) -> None:
                 st.session_state.last_report = report
                 state["last_report"] = report
                 st.rerun()
+
+
+def _load_past_conversations(st: Any, state: dict[str, Any]) -> None:
+    """Load the current project's persisted conversations into session history.
+
+    Runs once per project selection — the ``conversations_loaded_for`` marker
+    lives in ``st.session_state`` so it survives widget reruns. When the
+    selected project changes, the history is reset to that project's DB
+    conversations (plus any in-session entries not yet persisted), so history
+    never mixes reports across projects.
+    """
+    db = state.get("db")
+    proj = state.get("current_project")
+    if not db or not proj:
+        return
+    pid = proj.id if hasattr(proj, "id") else proj.get("id", "")
+    if not pid:
+        return
+    if st.session_state.get("conversations_loaded_for") == pid:
+        return
+
+    try:
+        from swarmmind.core.async_utils import run_async
+        convs = run_async(db.list_conversations(pid))
+    except Exception:
+        return
+
+    existing: list[dict[str, Any]] = state.get("conversation_history", [])
+    # Keep in-session entries of this project that were never persisted
+    keep = [
+        e for e in existing
+        if not e.get("_db_id") and e.get("_project_id") == pid
+    ]
+    have_ids = {e["_db_id"] for e in existing if e.get("_db_id")}
+
+    loaded: list[dict[str, Any]] = []
+    for c in reversed(convs):  # list_conversations is newest-first -> oldest-first
+        if c.id in have_ids:
+            continue
+        report = None
+        if c.report_json:
+            try:
+                report = json.loads(c.report_json)
+            except Exception:
+                report = None
+        loaded.append({
+            "_db_id": c.id,
+            "_project_id": pid,
+            "query": c.query,
+            "timestamp": c.created_at.strftime("%Y-%m-%d %H:%M"),
+            "worker_count": c.worker_count,
+            "web_search_used": c.web_search_used,
+            "report": report,
+        })
+
+    merged = keep + loaded
+    st.session_state.conversation_history = merged
+    state["conversation_history"] = merged
+    st.session_state.conversations_loaded_for = pid
 
 
 # ---------------------------------------------------------------------------
@@ -272,12 +335,19 @@ def _run_swarm(
                     local_orch = Orchestrator(config_obj, client, chroma_store=local_chroma)
                     
                     import asyncio
+                    hist = state.get("conversation_history", [])
+                    conv_context = [
+                        {"query": e.get("query", ""),
+                         "report": e.get("report")}
+                        for e in hist
+                    ] if hist else None
                     res = asyncio.run(
                         local_orch.run(
                             query=query,
                             project_context=project_ctx,
                             web_search_enabled=web_search,
                             vision_base64=vision_base64,
+                            conversation_history=conv_context,
                             progress_callback=progress_callback,
                         )
                     )
@@ -306,16 +376,43 @@ def _run_swarm(
             st.session_state.last_report = report
 
             # Add to conversation history
+            proj_entry = state.get("current_project")
+            pid_entry = (proj_entry.id if hasattr(proj_entry, "id")
+                         else proj_entry.get("id", "")) if proj_entry else ""
             entry: dict[str, Any] = {
                 "query": query,
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "worker_count": len(worker_status),
                 "report": report,
+                "_project_id": pid_entry,
             }
             history: list[dict[str, Any]] = state.get("conversation_history", [])
             history.append(entry)
             st.session_state.conversation_history = history
             state["conversation_history"] = history
+
+            # ---- Persist report to DB for cross-session durability ----
+            try:
+                from swarmmind.data.models import Conversation
+                from swarmmind.core.async_utils import run_async
+                db_save = state.get("db")
+                proj_save = state.get("current_project")
+                if db_save and proj_save:
+                    pid_save = (proj_save.id if hasattr(proj_save, "id")
+                                else proj_save.get("id", ""))
+                    if pid_save:
+                        conv = Conversation(
+                            project_id=pid_save,
+                            query=query,
+                            web_search_used=web_search,
+                            worker_count=len(worker_status),
+                            report_json=json.dumps(report),
+                        )
+                        saved_conv = run_async(db_save.create_conversation(conv))
+                        if saved_conv is not None:
+                            entry["_db_id"] = saved_conv.id
+            except Exception:
+                pass
 
             st.rerun()
 
