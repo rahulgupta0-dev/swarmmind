@@ -3,6 +3,8 @@
 > **AMD Lemonade Developer Challenge 2026 Submission**  
 > A local-first, multi-agent research swarm **Powered by Lemonade Omni Models**  
 > *Built as a deep ecosystem contribution to push local, multi-agent AI forward on AMD hardware.*
+>
+> **Challenge status:** Submitted and awaiting review — not yet selected. See [docs/CHALLENGE-STATUS.md](docs/CHALLENGE-STATUS.md) for verified status and next steps.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![AMD Lemonade](https://img.shields.io/badge/AMD-Lemonade-ED1C24.svg)](https://github.com/lemonade-sdk/lemonade)
@@ -54,6 +56,7 @@ graph TD
 - **🖥️ AMD Hardware Detection** — Auto-detects Ryzen AI NPU, ROCm GPU, and recommends optimal backends
 - **🎨 Lemonade Omni Models** — Native multimodal processing! Leverages Qwen3.6-35B-A3B for Vision, Flux for Diagrams, and Kokoro for TTS narration.
 - **📊 Structured Reports** — Executive summary, sections, contradictions, follow-up questions
+- **🔊 Read Aloud** — Opt-in "Read aloud" button narrates a report with Lemonade TTS, generated locally on your own machine
 - **🔗 Grounded Citations** — Stable `[S#]` source IDs, clickable citation markers, a grounding badge and a Sources appendix with the exact supporting snippet
 - **🧪 Quality & Evaluation** — Deterministic, offline golden-set metrics with an optional independent (blinded) LLM judge — see [docs/EVALUATION.md](docs/EVALUATION.md)
 - **📤 Export** — Markdown and HTML report export with inline citations and a run manifest
@@ -295,6 +298,7 @@ Apache 2.0 — see [LICENSE](LICENSE) for full terms.
 |---|---|
 | [Setup Guide](SETUP.md) | Judge setup instructions, troubleshooting |
 | [CHANGELOG.md](CHANGELOG.md) | TDD audit fixes and methodology |
+| [CHALLENGE-STATUS.md](docs/CHALLENGE-STATUS.md) | Verified challenge status, judging patterns and action plan |
 | [EVALUATION.md](docs/EVALUATION.md) | Evaluation method, metrics, golden set and caveats |
 | [REPRODUCIBILITY.md](docs/REPRODUCIBILITY.md) | Run manifest, one-command re-run and privacy note |
 | [README.md](README.md) | Architecture, features, CLI reference |
