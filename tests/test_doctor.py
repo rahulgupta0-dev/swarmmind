@@ -37,11 +37,14 @@ class _FakeClient:
 
 
 def _fake_config(api_key: str = "", host: str = "localhost", port: int = 13305,
-                 fetch_pages: bool = True, omni: str = "LMX-Omni-5.5B-Lite"):
+                 fetch_pages: bool = True, omni: str = "LMX-Omni-5.5B-Lite",
+                 **model_overrides):
+    model_values = {"omni": omni}
+    model_values.update(model_overrides)
     return SimpleNamespace(
         lemonade=SimpleNamespace(host=host, port=port, api_key=api_key),
         web=SimpleNamespace(fetch_pages=fetch_pages),
-        models=SimpleNamespace(omni=omni),
+        models=SimpleNamespace(**model_values),
         get_lemonade_base_url=lambda: f"http://{host}:{port}",
     )
 
@@ -70,13 +73,13 @@ def test_doctor_healthy(cli, monkeypatch) -> None:
     )
     result = cli.invoke(cli_main.main, ["doctor"])
     assert result.exit_code == 0, result.output
-    assert result.output.count("[PASS]") == 7
+    assert result.output.count("[PASS]") == 8
     assert "[PASS] Hardware / backend: Backend rocm, devices Radeon" in result.output
     # The two new informational checks are WARN for this older-style mock
     # server (no capability labels, no backend list) and never fail the run.
     assert "[WARN] Capabilities: No capability metadata reported by server" in result.output
     assert "[WARN] Backends: No backend list reported" in result.output
-    assert "Summary: 7 passed, 2 warning(s), 0 failed" in result.output
+    assert "Summary: 8 passed, 2 warning(s), 0 failed" in result.output
     assert "Next steps:" in result.output
     for command in (
         "swarmmind doctor",
@@ -135,10 +138,10 @@ def test_doctor_json_stdout_is_pure_and_masks_api_key(cli, monkeypatch) -> None:
     assert result.stdout.lstrip().startswith("{")
     payload = json.loads(result.stdout)
     assert payload["status"] == "ok"
-    assert payload["summary"] == {"PASS": 5, "WARN": 4, "FAIL": 0}
+    assert payload["summary"] == {"PASS": 5, "WARN": 5, "FAIL": 0}
     assert [c["name"] for c in payload["checks"]] == [
-        "python", "imports", "config", "data_dir",
-        "lemonade_health", "models", "capabilities", "backends", "system_info",
+        "python", "imports", "config", "data_dir", "lemonade_health", "models",
+        "configured_models", "capabilities", "backends", "system_info",
     ]
     assert payload["capabilities"] == {
         "vision": 0, "image": 0, "tts": 0,
@@ -155,9 +158,12 @@ def test_doctor_json_stdout_is_pure_and_masks_api_key(cli, monkeypatch) -> None:
     assert secret not in result.stdout
     assert secret not in result.stderr
     assert "WARN models: 0 model(s) visible" in result.stderr
+    assert "WARN configured_models: 1 of 1 configured model(s) not visible" in result.stderr
+    assert "lemonade pull" in result.stderr
     assert "WARN capabilities: No capability metadata reported by server" in result.stderr
     assert "WARN backends: No backend list reported" in result.stderr
     assert "WARN models:" not in result.stdout
+    assert "WARN configured_models:" not in result.stdout
     assert "WARN capabilities:" not in result.stdout
 
 
@@ -204,14 +210,14 @@ def test_doctor_capabilities_and_backends_present(cli, monkeypatch) -> None:
     assert result.exit_code == 0, result.stderr
     payload = json.loads(result.stdout)
     assert [c["name"] for c in payload["checks"]] == [
-        "python", "imports", "config", "data_dir",
-        "lemonade_health", "models", "capabilities", "backends", "system_info",
+        "python", "imports", "config", "data_dir", "lemonade_health", "models",
+        "configured_models", "capabilities", "backends", "system_info",
     ]
     expected_counts = {
         "vision": 2, "image": 1, "tts": 1,
         "transcription": 1, "tool_calling": 1, "omni": 1,
     }
-    cap = payload["checks"][6]
+    cap = payload["checks"][7]
     assert cap["name"] == "capabilities" and cap["status"] == "PASS"
     assert cap["capabilities"] == expected_counts
     assert cap["metadata_available"] is True
@@ -219,11 +225,11 @@ def test_doctor_capabilities_and_backends_present(cli, monkeypatch) -> None:
     assert "vision=2, image=1, tts=1, omni=1" in cap["detail"]
     assert payload["capabilities"] == expected_counts
 
-    back = payload["checks"][7]
+    back = payload["checks"][8]
     assert back["name"] == "backends" and back["status"] == "PASS"
     assert back["backends"] == ["rocm", "vulkan", "flm", "cpu"]
     assert payload["backends"] == back["backends"]
-    assert payload["summary"] == {"PASS": 9, "WARN": 0, "FAIL": 0}
+    assert payload["summary"] == {"PASS": 10, "WARN": 0, "FAIL": 0}
 
     # The human-readable output exposes the same information.
     text = cli.invoke(cli_main.main, ["doctor"])
@@ -306,6 +312,124 @@ def test_doctor_capabilities_requests_show_all_when_supported(cli, monkeypatch) 
     assert result.exit_code == 0, result.stderr
     assert holder["client"].show_all_calls == [False, True]
     payload = json.loads(result.stdout)
-    cap = payload["checks"][6]
+    cap = payload["checks"][7]
     assert cap["capabilities"]["vision"] == 1
     assert cap["capabilities"]["tts"] == 1
+
+
+def test_doctor_configured_models_all_present(cli, monkeypatch) -> None:
+    """Every configured model visible in /v1/models yields a PASS row."""
+    monkeypatch.setattr(cli_main, "_get_config", lambda: _fake_config(
+        conductor="user.inkling-mini",
+        worker="unsloth/Inkling-2-Mini-GGUF",
+        embeddings="nomic-embed-text-v1-GGUF",
+        image="Flux-2-Klein-4B",
+        tts="kokoro-v1",
+        omni="LMX-Omni-5.5B-Lite",
+    ))
+    monkeypatch.setattr(
+        cli_main, "_doctor_client",
+        lambda config: _FakeClient(
+            health={"status": "ok", "code": 200},
+            models=[
+                {"id": "user.inkling-mini"},
+                {"id": "unsloth/Inkling-2-Mini-GGUF:UD-Q4_K_XL"},
+                {"id": "nomic-embed-text-v1-GGUF"},
+                {"id": "Flux-2-Klein-4B"},
+                {"id": "kokoro-v1"},
+                {"id": "LMX-Omni-5.5B-Lite"},
+            ],
+            info={"backend": "rocm"},
+        ),
+    )
+    result = cli.invoke(cli_main.main, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "[PASS] Configured models: All 6 configured model(s) visible in Lemonade" in result.output
+    assert "lemonade pull" not in result.output
+
+    payload = json.loads(cli.invoke(cli_main.main, ["doctor", "--json"]).stdout)
+    check = next(c for c in payload["checks"] if c["name"] == "configured_models")
+    assert check["status"] == "PASS"
+    assert check["missing"] == []
+    assert set(check["configured"]) == {"conductor", "worker", "embeddings", "image", "tts", "omni"}
+    assert check["visible_count"] == 6
+    assert payload["status"] == "ok"
+
+
+def test_doctor_configured_models_missing_warns(cli, monkeypatch) -> None:
+    """Missing configured models WARN (never FAIL) with copy-pasteable fixes."""
+    monkeypatch.setattr(cli_main, "_get_config", lambda: _fake_config(
+        conductor="unsloth/Inkling-2-Mini-GGUF",
+        worker="inkling-mini",
+        omni="",
+    ))
+    monkeypatch.setattr(
+        cli_main, "_doctor_client",
+        lambda config: _FakeClient(
+            health={"status": "ok", "code": 200},
+            models=[{"id": "Qwen3.6-35B-A3B-GGUF"}],
+            info={"backend": "rocm"},
+        ),
+    )
+    result = cli.invoke(cli_main.main, ["doctor"])
+    assert result.exit_code == 0, result.output  # informational: never a failure
+    assert "[WARN] Configured models:" in result.output
+    assert "conductor=unsloth/Inkling-2-Mini-GGUF" in result.output
+    assert "worker=inkling-mini" in result.output
+    assert "lemonade pull unsloth/Inkling-2-Mini-GGUF" in result.output
+    assert "lemonade pull user.inkling-mini ..." in result.output
+    assert "registered in Lemonade but not downloaded" in result.output
+    assert "docs/MODELS.md" in result.output
+    assert "Traceback" not in result.output
+
+    payload = json.loads(cli.invoke(cli_main.main, ["doctor", "--json"]).stdout)
+    check = next(c for c in payload["checks"] if c["name"] == "configured_models")
+    assert check["status"] == "WARN"
+    assert payload["status"] == "ok"
+    assert payload["summary"]["FAIL"] == 0
+    assert [item["role"] for item in check["missing"]] == ["conductor", "worker"]
+    assert check["missing"][0]["pull_command"].startswith("lemonade pull ")
+    assert check["show_all_available"] is False
+    # Empty roles are skipped.
+    assert "omni" not in check["configured"]
+
+
+def test_doctor_configured_models_uses_show_all_to_classify(cli, monkeypatch) -> None:
+    """?show_all=true data separates registered-but-not-downloaded models."""
+
+    class _ShowAllClient(_FakeClient):
+        def __init__(self) -> None:
+            super().__init__(health={"status": "ok", "code": 200})
+            self.show_all_calls: list[bool] = []
+
+        async def get_models(self, show_all: bool = False):
+            self.show_all_calls.append(show_all)
+            if show_all:
+                return [{"id": "unsloth/Inkling-2-Mini-GGUF:UD-Q4_K_XL"}]
+            return [{"id": "Qwen3.6-35B-A3B-GGUF"}]
+
+    holder: dict[str, _ShowAllClient] = {}
+
+    def _factory(config):
+        holder["client"] = _ShowAllClient()
+        return holder["client"]
+
+    monkeypatch.setattr(cli_main, "_get_config", lambda: _fake_config(
+        conductor="unsloth/Inkling-2-Mini-GGUF",
+        worker="Flux-2-Klein-4B",
+        omni="",
+    ))
+    monkeypatch.setattr(cli_main, "_doctor_client", _factory)
+    result = cli.invoke(cli_main.main, ["doctor", "--json"])
+    assert result.exit_code == 0, result.stderr
+    assert holder["client"].show_all_calls == [False, True]
+    payload = json.loads(result.stdout)
+    check = next(c for c in payload["checks"] if c["name"] == "configured_models")
+    assert check["status"] == "WARN"
+    assert check["show_all_available"] is True
+    states = {item["role"]: item["state"] for item in check["missing"]}
+    assert states == {
+        "conductor": "registered but not downloaded",
+        "worker": "not registered",
+    }
+    assert "registered but not downloaded" in check["detail"]

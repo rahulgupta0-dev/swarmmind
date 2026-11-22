@@ -770,6 +770,7 @@ _DOCTOR_LABELS = {
     "data_dir": "Data directory",
     "lemonade_health": "Lemonade server",
     "models": "Models / Omni",
+    "configured_models": "Configured models",
     "capabilities": "Capabilities",
     "backends": "Backends",
     "system_info": "Hardware / backend",
@@ -956,6 +957,123 @@ def _check_models(models: Any) -> dict[str, Any]:
         f"{len(models)} model(s) visible, but no Omni model was found",
         hint="Set models.omni in ~/.swarmmind/config.toml to an Omni collection name.",
         count=len(models), omni_visible=False, omni_models=[],
+    )
+
+
+# Configured-model verification.  SwarmMind never loads a model itself: it
+# forwards the strings from [models] in config.toml to Lemonade's /v1 API.
+_DOCTOR_CONFIGURED_ROLES = ("conductor", "worker", "embeddings", "image", "tts", "omni")
+_DOCTOR_MODELS_DOC = "docs/MODELS.md"
+
+
+def _doctor_model_names(models: Any) -> list[str]:
+    """Extract id/name strings from a /v1/models payload."""
+    if isinstance(models, dict):
+        models = models.get("data", [])
+    if not isinstance(models, list):
+        return []
+    return [
+        str(model.get("id") or model.get("name") or "")
+        for model in models if isinstance(model, dict)
+    ]
+
+
+def _doctor_model_visible(model: str, visible: list[str]) -> bool:
+    """Case-insensitive exact-or-substring match against visible model ids."""
+    needle = model.strip().lower()
+    if not needle:
+        return False
+    for name in visible:
+        candidate = name.strip().lower()
+        if candidate and (needle == candidate or needle in candidate or candidate in needle):
+            return True
+    return False
+
+
+def _doctor_pull_command(model: str) -> str:
+    """Build the copy-pasteable Lemonade command for a configured model."""
+    command = f"lemonade pull {model}"
+    lowered = model.strip().lower()
+    # Bare custom names usually need the user.* prefix and explicit recipe args.
+    if not lowered.startswith("user.") and "/" not in model and not lowered.startswith("http"):
+        command += f" (or `lemonade pull user.{model} ...` for a user model)"
+    return command
+
+
+def _check_configured_models(
+    config: Config | None,
+    models: Any,
+    show_all_models: Any = None,
+) -> dict[str, Any]:
+    """Check that configured model names are visible in Lemonade /v1/models.
+
+    This is informational only: a missing model is a WARN, never a FAIL.  When
+    show_all data (``/v1/models?show_all=true``) is available we can tell a
+    model that is registered but not downloaded from one that is not registered
+    at all.
+    """
+    configured: dict[str, str] = {}
+    if config is not None:
+        model_config = getattr(config, "models", None)
+        for role in _DOCTOR_CONFIGURED_ROLES:
+            value = str(getattr(model_config, role, "") or "").strip()
+            if value:
+                configured[role] = value
+
+    visible = _doctor_model_names(models)
+    all_names = _doctor_model_names(show_all_models) if show_all_models is not None else []
+    show_all_available = show_all_models is not None
+
+    missing: list[dict[str, str]] = []
+    for role, name in configured.items():
+        if _doctor_model_visible(name, visible):
+            continue
+        if show_all_available:
+            state = (
+                "registered but not downloaded"
+                if _doctor_model_visible(name, all_names) else "not registered"
+            )
+        else:
+            state = "not visible in /v1/models (check with ?show_all=true)"
+        missing.append({
+            "role": role,
+            "model": name,
+            "state": state,
+            "pull_command": _doctor_pull_command(name),
+        })
+
+    extra: dict[str, Any] = {
+        "configured": configured,
+        "missing": missing,
+        "visible_count": len(visible),
+        "show_all_available": show_all_available,
+    }
+    if not configured:
+        return _doctor_check(
+            "configured_models", "PASS", "No configured model names to verify",
+            configured={}, missing=[], visible_count=len(visible),
+            show_all_available=show_all_available,
+        )
+    if not missing:
+        return _doctor_check(
+            "configured_models", "PASS",
+            f"All {len(configured)} configured model(s) visible in Lemonade",
+            **extra,
+        )
+
+    entries = "; ".join(
+        f"{item['role']}={item['model']} ({item['state']}) -> {item['pull_command']}"
+        for item in missing
+    )
+    detail = (
+        f"{len(missing)} of {len(configured)} configured model(s) not visible in Lemonade: "
+        f"{entries}. Note: a model can be registered in Lemonade but not downloaded; "
+        f"/v1/models lists only loaded models."
+    )
+    return _doctor_check(
+        "configured_models", "WARN", detail,
+        hint=f"See {_DOCTOR_MODELS_DOC} for supported models and pull commands.",
+        **extra,
     )
 
 
@@ -1206,6 +1324,9 @@ def doctor(as_json: bool) -> None:
             hint=_DOCTOR_HINT,
         ))
         checks.append(_doctor_check("models", "WARN", "Skipped — Lemonade server unavailable"))
+        checks.append(_doctor_check(
+            "configured_models", "WARN", "Skipped — configuration or Lemonade server unavailable",
+        ))
         checks.append(_doctor_check("system_info", "WARN", "Skipped — Lemonade server unavailable"))
     else:
         client = _doctor_client(config)
@@ -1236,6 +1357,9 @@ def doctor(as_json: bool) -> None:
 
         if not reachable:
             checks.append(_doctor_check("models", "WARN", "Skipped — Lemonade server unavailable"))
+            checks.append(_doctor_check(
+                "configured_models", "WARN", "Skipped — Lemonade server unavailable",
+            ))
             checks.append(_doctor_check("system_info", "WARN", "Skipped — Lemonade server unavailable"))
         else:
             try:
@@ -1248,13 +1372,21 @@ def doctor(as_json: bool) -> None:
 
             # Informational: richer /v1/models metadata when the client can
             # ask for show_all; otherwise reuse the list already fetched above.
+            # show_all data also lets the configured-model check distinguish a
+            # registered-but-not-downloaded model from an unregistered one.
             capability_models = models
+            show_all_available = False
             if _client_supports_show_all(client):
                 try:
                     with _quiet_client_logs():
                         capability_models = asyncio.run(client.get_models(show_all=True))
+                        show_all_available = True
                 except Exception:  # noqa: BLE001 - never print raw exceptions here
                     capability_models = models
+            checks.append(_check_configured_models(
+                config, models,
+                capability_models if show_all_available else None,
+            ))
             capability_check = _check_capabilities(capability_models)
             checks.append(capability_check)
             capabilities_summary = capability_check.get("capabilities", {})
