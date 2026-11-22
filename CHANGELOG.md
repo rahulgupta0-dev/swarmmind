@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`swarmmind doctor`** — one-command diagnostics for Python, dependencies,
+  config, data directory, Lemonade health/models/hardware and API-key setup,
+  with actionable next steps and a pure-JSON mode.
+- **First-run onboarding** in the Streamlit app: a dismissible getting-started
+  card, actionable connection errors (no raw tracebacks), and a source-help
+  caption.
+- **Newcomer docs**: `docs/QUICKSTART.md` (clone to cited report in 5 minutes)
+  and `docs/TROUBLESHOOTING.md` (symptom → fix table).
+
 ## [0.4.0] - 2026-11-22
 
 Focus: turn SwarmMind from a demo orchestrator into a trustworthy,

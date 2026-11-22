@@ -3,6 +3,11 @@
 > **AMD Lemonade Developer Challenge 2026 Submission**  
 > Quick start guide for developers and community members setting up SwarmMind
 
+> **Just getting started?** See the [5-minute quickstart](docs/QUICKSTART.md) for
+> a copy-paste clone-to-cited-report path. If something breaks, see
+> [Troubleshooting](docs/TROUBLESHOOTING.md) (start with `swarmmind doctor`).
+> The detailed steps below remain the full reference.
+
 ---
 
 ## 📋 Prerequisites

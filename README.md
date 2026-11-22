@@ -6,6 +6,9 @@
 >
 > **Challenge status:** Submitted and awaiting review — not yet selected. See [docs/CHALLENGE-STATUS.md](docs/CHALLENGE-STATUS.md) for verified status and next steps.
 
+> ### 🆕 New here? [Start the 5-minute quickstart →](docs/QUICKSTART.md)
+> Clone → install → run → get a cited report in minutes. Having trouble? See [Troubleshooting](docs/TROUBLESHOOTING.md).
+
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![AMD Lemonade](https://img.shields.io/badge/AMD-Lemonade-ED1C24.svg)](https://github.com/lemonade-sdk/lemonade)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
@@ -109,6 +112,14 @@ bash tests/smoke_test.sh
 ```
 
 Open http://localhost:8501 in your browser.
+
+> **No AMD hardware?** You can still run the full CLI and UI pipeline against the
+> bundled mock server. Start it in a separate terminal with
+> `.venv/bin/python tests/mock_lemonade_server.py` (port 13305; override with
+> `MOCK_PORT`) in place of `lemonade-server start`. It returns canned responses
+> and does not validate real AMD hardware or model quality. See the
+> [5-minute quickstart](docs/QUICKSTART.md) and
+> [troubleshooting](docs/TROUBLESHOOTING.md).
 
 ---
 
@@ -245,6 +256,7 @@ SwarmMind integrates with the following Lemonade endpoints:
 
 | Command | Description |
 |---|---|
+| `swarmmind doctor` | Diagnose Python, config, server, models and local setup |
 | `swarmmind ask <query>` | Run a research query from the terminal |
 | `swarmmind ask <query> --no-web` | Disable web search for this query |
 | `swarmmind ask <query> --sequential` | Run workers sequentially (safer on low-RAM systems) |
@@ -306,7 +318,9 @@ Apache 2.0 — see [LICENSE](LICENSE) for full terms.
 
 | Document | Description |
 |---|---|
-| [Setup Guide](SETUP.md) | Judge setup instructions, troubleshooting |
+| [Quickstart](docs/QUICKSTART.md) | Clone-to-cited-report in 5 minutes (incl. no-AMD mock server) |
+| [Setup Guide](SETUP.md) | Judge setup instructions, detailed configuration |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Symptom → cause → exact fix, `swarmmind doctor` first |
 | [CHANGELOG.md](CHANGELOG.md) | TDD audit fixes and methodology |
 | [CHALLENGE-STATUS.md](docs/CHALLENGE-STATUS.md) | Verified challenge status, judging patterns and action plan |
 | [ECOSYSTEM-RESEARCH.md](docs/ECOSYSTEM-RESEARCH.md) | AMD ecosystem and community research behind the submission |
