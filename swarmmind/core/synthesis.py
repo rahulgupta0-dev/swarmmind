@@ -348,7 +348,9 @@ class Synthesis:
                 known_source_ids=known_ids, sources=registry,
             )
         except Exception as exc:
-            logger.exception("Synthesis failed: %s", exc)
+            # A malformed LLM response is an expected, handled path — a full
+            # traceback here would flood CLI output during normal fallback.
+            logger.warning("Synthesis failed, using fallback report: %s", exc)
             return self._fallback_report(outputs, original_query)
 
     # ------------------------------------------------------------------
