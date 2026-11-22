@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Upstream watch doc** (`docs/UPSTREAM-WATCH.md`) — dated, sourced record of
+  Lemonade stable/RC releases, issues and PRs, mapped to SwarmMind's current
+  behaviour; cross-linked from `ECOSYSTEM-RESEARCH.md` and `TROUBLESHOOTING.md`.
+- **`swarmmind doctor` capability/backend probe** — extends diagnostics to
+  report detected model capabilities and backends alongside health/hardware.
 - **`swarmmind doctor`** — one-command diagnostics for Python, dependencies,
   config, data directory, Lemonade health/models/hardware and API-key setup,
   with actionable next steps and a pure-JSON mode.

@@ -1,5 +1,22 @@
 # Ecosystem Research — AMD / Lemonade / GAIA (as of 2026-11-22)
 
+## 2026-11-22 update
+
+A focused, dated watch of the latest Lemonade releases, issues and PRs — with a
+per-item mapping to what SwarmMind already does — now lives in
+[UPSTREAM-WATCH.md](UPSTREAM-WATCH.md). It covers stable **v2026.47.1**, RC
+**candidate-v2026.48.3**, and PRs/issues #4181, #4209, #4202, #4178, #4230,
+#4184 and #4227. RC features are release-candidate and were **not** validated
+on local AMD hardware.
+
+**Correction — issue #4181 does not affect direct TTS.** The reported 400 comes
+from the GUI model-options endpoint `/api/v1/models/kokoro-v1/options`; the issue
+explicitly says direct `/v1/audio/speech` calls with `"voice":"bm_george"` work.
+SwarmMind's `text_to_speech()` sends `voice` in the `/v1/audio/speech` payload
+(`swarmmind/lemonade/client.py:352-368`), so read-aloud is unaffected — no code
+change. Earlier notes in this document that could be read as implicating direct
+TTS calls should be understood with that distinction.
+
 > Research-only document. **Nothing here has been implemented.** Ideas are ranked for a
 > project at v0.4 state (see `docs/EXECUTION-PLAN.md`): grounded citations, Omni client
 > methods, deterministic eval harness all landed; the multi-round LLM critic loop is
