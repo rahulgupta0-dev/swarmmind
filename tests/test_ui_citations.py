@@ -407,3 +407,94 @@ def test_read_aloud_catches_client_errors_friendly() -> None:
     joined = "\n".join(st.markdowns)
     assert "Read aloud is unavailable" in joined
     assert "server busy" in joined
+
+
+# ---------------------------------------------------------------------------
+# UI polish — citation filtering, grounding states, status labels
+# ---------------------------------------------------------------------------
+
+
+def test_linked_citations_skips_unknown_ids() -> None:
+    from swarmmind.ui.panels.chat import _linked_citations, link_citations
+
+    assert _linked_citations("Known [S1], unknown [S9].", {"S1"}) == (
+        "Known [S1](#source-S1), unknown [S9]."
+    )
+    # The public helper keeps its permissive, backwards-compatible behaviour.
+    assert link_citations("[S9]") == "[S9](#source-S9)"
+    assert link_citations(None) == ""
+
+
+def test_report_never_links_unknown_citation_ids() -> None:
+    from swarmmind.ui.panels.chat import _render_report
+
+    st = FakeSt()
+    _render_report(st, _report())
+    joined = "\n".join(st.markdowns)
+    assert "[S1](#source-S1)" in joined
+    assert "[S9](#source-S9)" not in joined
+    assert "Unknown [S9]." in joined  # retained as plain text
+
+
+def test_known_source_ids_and_cite_markers() -> None:
+    from swarmmind.ui.panels.chat import (
+        cite_anchor_html, cite_markers, known_source_ids,
+    )
+
+    known = known_source_ids(_report())
+    assert known == frozenset({"S1"})
+    assert cite_markers(["S1", "S9", ""], known) == "[S1](#source-S1)"
+    assert cite_anchor_html(["S1", "S9"], known) == '<a href="#source-S1">[S1]</a>'
+    assert cite_markers("S1") == ""
+    assert cite_anchor_html(None) == ""
+
+
+def test_grounding_tone_and_claim_status_classes() -> None:
+    from swarmmind.ui.panels.chat import claim_css, grounding_tone
+
+    contradicted = _report()
+    contradicted["grounding"] = {
+        "total_claims": 2, "supported": 1, "unverified": 0, "contradicted": 1,
+    }
+    empty = _report()
+    empty["grounding"] = {"total_claims": 0}
+
+    assert grounding_tone(_report()) == "good"
+    assert grounding_tone(contradicted) == "bad"
+    assert grounding_tone(empty) == "warn"
+    assert claim_css("supported") == "claim-ok"
+    assert claim_css("contradicted") == "claim-contradicted"
+    assert claim_css("unverified") == "claim-unverified"
+
+
+def test_contradicted_report_uses_bad_grounding_badge() -> None:
+    from swarmmind.ui.panels.chat import _render_report
+
+    report = _report()
+    report["grounding"] = {
+        "total_claims": 2, "supported": 1, "unverified": 0, "contradicted": 1,
+    }
+    st = FakeSt()
+    _render_report(st, report)
+    joined = "\n".join(st.markdowns)
+    assert "grounding-bad" in joined
+    assert "Contradicted:" in joined
+
+
+def test_source_status_labels_are_distinct_and_accessible() -> None:
+    from swarmmind.ui.panels.sources import status_css, status_label
+
+    labels = [status_label(s) for s in ("pending", "processing", "ready", "error")]
+    assert len(set(labels)) == 4
+    assert status_label("ready") == "Ready — searchable"
+    assert status_label("") == "Pending — queued"
+    assert status_css("READY") == "ready"
+    assert status_css("unexpected") == "pending"
+
+
+def test_tts_availability_helper() -> None:
+    from swarmmind.ui.panels.chat import tts_available
+
+    assert tts_available(None) is False
+    assert tts_available({"client": None}) is False
+    assert tts_available({"client": object()}) is True

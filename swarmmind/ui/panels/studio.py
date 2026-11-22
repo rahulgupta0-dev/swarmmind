@@ -42,40 +42,46 @@ def render_studio_panel(st: Any, state: dict[str, Any]) -> None:
     # Quick Actions
     # ------------------------------------------------------------------
     st.markdown("**Quick Actions**")
-
     handle_studio_action(st, state)
 
-    if st.button(
-        "Full Report",
-        use_container_width=True,
-        disabled=not has_report,
-        key="full_report_btn",
-    ):
-        st.info("Report is displayed in the centre panel above.")
+    if not has_report:
+        st.markdown(
+            '<div class="action-hint">Actions unlock once you run a swarm query.</div>',
+            unsafe_allow_html=True,
+        )
 
-    if st.button(
-        "Diagram",
-        use_container_width=True,
-        disabled=not has_report,
-        key="diagram_btn",
-    ):
-        _generate_diagram(st, config_obj, client, last_report)
-
-    if st.button(
-        "Narration",
-        use_container_width=True,
-        disabled=not has_report,
-        key="narration_btn",
-    ):
-        _generate_narration(st, config_obj, client, last_report)
-
-    if st.button(
-        "Summary",
-        use_container_width=True,
-        disabled=not has_report,
-        key="summary_btn",
-    ):
-        _generate_summary(st, config_obj, client, last_report)
+    # Two compact columns keep the row readable in the narrow right panel.
+    qa_left, qa_right = st.columns(2)
+    with qa_left:
+        if st.button(
+            "Full Report",
+            use_container_width=True,
+            disabled=not has_report,
+            key="full_report_btn",
+        ):
+            st.info("Report is displayed in the centre panel above.")
+        if st.button(
+            "Narration",
+            use_container_width=True,
+            disabled=not has_report,
+            key="narration_btn",
+        ):
+            _generate_narration(st, config_obj, client, last_report)
+    with qa_right:
+        if st.button(
+            "Diagram",
+            use_container_width=True,
+            disabled=not has_report,
+            key="diagram_btn",
+        ):
+            _generate_diagram(st, config_obj, client, last_report)
+        if st.button(
+            "Summary",
+            use_container_width=True,
+            disabled=not has_report,
+            key="summary_btn",
+        ):
+            _generate_summary(st, config_obj, client, last_report)
 
     st.divider()
 
@@ -117,24 +123,30 @@ def render_studio_panel(st: Any, state: dict[str, Any]) -> None:
         md_content = _report_to_markdown(last_report, config_obj)
         html_content = _report_to_html(last_report, config_obj)
 
-        st.download_button(
-            "Markdown",
-            data=md_content,
-            file_name="swarmmind_report.md",
-            mime="text/markdown",
-            use_container_width=True,
-            key="export_md",
-        )
-        st.download_button(
-            "HTML",
-            data=html_content,
-            file_name="swarmmind_report.html",
-            mime="text/html",
-            use_container_width=True,
-            key="export_html",
-        )
+        exp_md, exp_html = st.columns(2)
+        with exp_md:
+            st.download_button(
+                "Markdown",
+                data=md_content,
+                file_name="swarmmind_report.md",
+                mime="text/markdown",
+                use_container_width=True,
+                key="export_md",
+            )
+        with exp_html:
+            st.download_button(
+                "HTML",
+                data=html_content,
+                file_name="swarmmind_report.html",
+                mime="text/html",
+                use_container_width=True,
+                key="export_html",
+            )
     else:
-        st.caption("Run a swarm query first to enable exports.")
+        st.markdown(
+            '<div class="action-hint">Exports unlock after your first swarm query.</div>',
+            unsafe_allow_html=True,
+        )
 
     st.divider()
 
@@ -144,24 +156,16 @@ def render_studio_panel(st: Any, state: dict[str, Any]) -> None:
     st.markdown(f"### {icon_html('link')} Lemonade", unsafe_allow_html=True)
 
     conn_status = state.get("connection_status", "unknown")
-    if conn_status == "ok":
-        st.markdown(
-            f'<span style="color:green;">{icon_html("circle", "fill")}</span>'
-            ' <span style="font-weight:600;">Connected</span>',
-            unsafe_allow_html=True,
-        )
-    elif conn_status == "error":
-        st.markdown(
-            f'<span style="color:red;">{icon_html("circle", "fill")}</span>'
-            ' <span style="font-weight:600;">Disconnected</span>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            f'<span style="color:gray;">{icon_html("circle", "fill")}</span>'
-            ' <span style="font-weight:600;">Unknown</span>',
-            unsafe_allow_html=True,
-        )
+    conn_view = {
+        "ok": ("conn-ok", "Connected"),
+        "error": ("conn-err", "Disconnected"),
+    }.get(conn_status, ("conn-unknown", "Unknown"))
+    conn_css, conn_label = conn_view
+    st.markdown(
+        f'<span class="conn-state {conn_css}">'
+        f'{icon_html("circle", "fill")} {conn_label}</span>',
+        unsafe_allow_html=True,
+    )
 
     if config_obj:
         st.code(

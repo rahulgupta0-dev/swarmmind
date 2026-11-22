@@ -50,13 +50,98 @@ _CITATION_MARKER_RE = re.compile(r"\[(S\d+)\]")
 # ---------------------------------------------------------------------------
 
 
-def link_citations(text: Any) -> str:
-    """Turn ``[S1]`` markers into keyboard-accessible in-page links."""
+def _linked_citations(text: Any, known_ids: Any = None) -> str:
+    """Link ``[S#]`` markers, skipping IDs that are not in *known_ids*.
+
+    ``known_ids=None`` keeps the permissive behaviour used by plain Markdown
+    exports. Report rendering passes the report's real source IDs so an
+    unknown marker never becomes a dead in-page anchor.
+    """
     if not isinstance(text, str):
         return "" if text is None else str(text)
-    return _CITATION_MARKER_RE.sub(
-        lambda match: f"[{match.group(1)}](#source-{match.group(1)})", text
-    )
+    allowed = set(known_ids) if known_ids is not None else None
+
+    def replace(match: re.Match[str]) -> str:
+        sid = match.group(1)
+        if allowed is not None and sid not in allowed:
+            return f"[{sid}]"
+        return f"[{sid}](#source-{sid})"
+
+    return _CITATION_MARKER_RE.sub(replace, text)
+
+
+def link_citations(text: Any) -> str:
+    """Turn ``[S1]`` markers into keyboard-accessible in-page links."""
+    return _linked_citations(text)
+
+
+def known_source_ids(report: dict[str, Any]) -> frozenset[str]:
+    """Return the source IDs that actually exist in *report*."""
+    ids: set[str] = set()
+    sources = report.get("sources")
+    if isinstance(sources, list):
+        for raw in sources:
+            if isinstance(raw, dict):
+                sid = str(raw.get("id", "") or "").strip()
+                if sid:
+                    ids.add(sid)
+    return frozenset(ids)
+
+
+def cite_markers(ids: Any, known_ids: Any = None) -> str:
+    """Render a compact run of ``[S#]`` links, omitting unknown IDs."""
+    if not isinstance(ids, (list, tuple, set, frozenset)):
+        return ""
+    allowed = set(known_ids) if known_ids is not None else None
+    parts: list[str] = []
+    for value in ids:
+        sid = str(value).strip()
+        if not sid or (allowed is not None and sid not in allowed):
+            continue
+        parts.append(f"[{_esc(sid)}](#source-{_esc(sid)})")
+    return " ".join(parts)
+
+
+def cite_anchor_html(ids: Any, known_ids: Any = None) -> str:
+    """Render citation IDs as real ``<a>`` anchors for use inside HTML markup."""
+    if not isinstance(ids, (list, tuple, set, frozenset)):
+        return ""
+    allowed = set(known_ids) if known_ids is not None else None
+    parts: list[str] = []
+    for value in ids:
+        sid = str(value).strip()
+        if not sid or (allowed is not None and sid not in allowed):
+            continue
+        parts.append(f'<a href="#source-{_esc(sid)}">[{_esc(sid)}]</a>')
+    return " ".join(parts)
+
+
+def grounding_tone(report: dict[str, Any]) -> str:
+    """CSS tone for a report's grounding state: good / warn / bad."""
+    grounding = report.get("grounding")
+    grounding = grounding if isinstance(grounding, dict) else {}
+    contradicted = int(grounding.get("contradicted", 0) or 0)
+    unverified = int(grounding.get("unverified", 0) or 0)
+    supported = int(grounding.get("supported", 0) or 0)
+    total = int(grounding.get("total_claims", 0) or 0)
+    if contradicted:
+        return "bad"
+    if not total or unverified or not supported:
+        return "warn"
+    return "good"
+
+
+def claim_css(status: str) -> str:
+    """Map a claim status to its styling class."""
+    return {
+        "supported": "claim-ok",
+        "contradicted": "claim-contradicted",
+    }.get(str(status).lower(), "claim-unverified")
+
+
+def tts_available(state: dict[str, Any] | None) -> bool:
+    """Whether local Lemonade text-to-speech can be used in this session."""
+    return bool((state or {}).get("client"))
 
 
 def grounding_text(report: dict[str, Any]) -> str:
@@ -751,13 +836,28 @@ def _render_action_buttons(
             key="download_md_btn",
             use_container_width=True,
         )
+    # Read aloud is local-only: it needs a Lemonade client. Show an obvious
+    # disabled state (with a short explanation) when TTS is unavailable.
+    tts_ready = tts_available(state)
     with cols[4]:
         if st.button(
             "Read aloud",
             key="read_aloud_btn",
             use_container_width=True,
+            disabled=not tts_ready,
+            help=(
+                "Speak this report with your local Lemonade TTS voice."
+                if tts_ready else
+                "Connect to a local Lemonade server to enable read aloud."
+            ),
         ):
+            st.caption("Preparing audio…")
             _read_aloud_report(st, state, report)
+        if not tts_ready:
+            st.markdown(
+                '<div class="action-hint">Read aloud needs a local TTS connection.</div>',
+                unsafe_allow_html=True,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -869,25 +969,28 @@ def _read_aloud_report(
 # ---------------------------------------------------------------------------
 
 
+def _render_section_heading(st: Any, title: str, known: Any = None) -> None:
+    """Render a consistent report section heading with live citation links."""
+    def replace(match: re.Match[str]) -> str:
+        sid = match.group(1)
+        if known is not None and sid not in set(known):
+            return f"[{_esc(sid)}]"
+        return f'<a href="#source-{_esc(sid)}">[{_esc(sid)}]</a>'
+
+    safe = _CITATION_MARKER_RE.sub(replace, _esc(title))
+    st.markdown(f'<h3 class="report-section">{safe}</h3>', unsafe_allow_html=True)
+
+
 def _render_grounding_badge(st: Any, report: dict[str, Any]) -> None:
     """Compact, colour-and-text grounding summary with accessible markup."""
     text = grounding_text(report)
-    grounding = report.get("grounding")
-    grounding = grounding if isinstance(grounding, dict) else {}
-    total = int(grounding.get("total_claims", 0) or 0)
-    unverified = int(grounding.get("unverified", 0) or 0)
-    contradicted = int(grounding.get("contradicted", 0) or 0)
-    if not total or (unverified == total and not contradicted and not grounding.get("supported")):
-        tone = "warn"
-    elif unverified or contradicted:
-        tone = "warn"
-    else:
-        tone = "good"
+    tone = grounding_tone(report)
+    label = {"good": "supported", "warn": "unverified", "bad": "contradicted"}[tone]
     st.markdown(
         f'<div class="grounding-badge grounding-{tone}" role="status" '
-        f'aria-label="Grounding: {_esc(text)}">'
+        f'aria-label="Grounding {label}: {_esc(text)}">'
         f'<span class="badge-dot" aria-hidden="true"></span>'
-        f'<span>{_esc(text)}</span></div>',
+        f'<span><strong>{label.title()}:</strong> {_esc(text)}</span></div>',
         unsafe_allow_html=True,
     )
 
@@ -915,28 +1018,29 @@ def _render_report(
 ) -> None:
     """Render the structured report with clickable citations and source cards."""
     title = report.get("title", "Research Report")
+    known = known_source_ids(report)
     st.markdown(f"## {title}")
+    # The one and only grounding summary line for this report.
     _render_grounding_badge(st, report)
 
     # Executive Summary
     summary = report.get("executive_summary", "")
     if summary:
-        st.markdown("### Executive Summary")
-        st.markdown(link_citations(summary))
+        _render_section_heading(st, "Executive Summary", known)
+        st.markdown(_linked_citations(summary, known))
 
-    # Sections — every [S#] marker becomes a link to its source card below.
+    # Sections — only known [S#] markers become links to source cards below.
     for section in report.get("sections", []):
         if not isinstance(section, dict):
             continue
         heading = section.get("heading", "")
         content = section.get("content", "")
         if heading:
-            st.markdown(f"### {link_citations(heading)}")
+            _render_section_heading(st, heading, known)
         if content:
-            st.markdown(link_citations(content))
-        cites = section.get("sources") or []
-        if cites:
-            markers = " ".join(f"[{_esc(sid)}](#source-{_esc(sid)})" for sid in cites)
+            st.markdown(_linked_citations(content, known))
+        markers = cite_markers(section.get("sources") or [], known)
+        if markers:
             st.markdown(f"**Cites:** {markers}")
 
     # Grounding detail — unverified claims are visually distinct.
@@ -947,9 +1051,9 @@ def _render_report(
                 if not isinstance(claim, dict):
                     continue
                 status = str(claim.get("status", "unverified"))
-                css = "claim-ok" if status == "supported" else "claim-unverified"
-                label = "Supported" if status == "supported" else status.capitalize()
-                ids = " ".join(f"[{_esc(sid)}](#source-{_esc(sid)})" for sid in claim.get("source_ids", []))
+                css = claim_css(status)
+                label = status.replace("_", " ").capitalize()
+                ids = cite_anchor_html(claim.get("source_ids", []), known)
                 st.markdown(
                     f'<div class="claim-row {css}" role="listitem" '
                     f'aria-label="Claim {i + 1}: {label}">'
@@ -961,18 +1065,18 @@ def _render_report(
     # Conclusion
     conclusion = report.get("conclusion", "")
     if conclusion:
-        st.markdown("### Conclusion")
-        st.markdown(link_citations(conclusion))
+        _render_section_heading(st, "Conclusion", known)
+        st.markdown(_linked_citations(conclusion, known))
 
     # Contradictions
     contradictions: list[str] = report.get("contradictions", [])
     if contradictions:
-        st.markdown(f"### {icon_html('warning-octagon')} Contradictions", unsafe_allow_html=True)
+        _render_section_heading(st, "Contradictions", known)
         for c in contradictions:
-            st.warning(link_citations(c))
+            st.warning(_linked_citations(c, known))
 
-    # Source cards — anchored so inline citation links scroll/expand here.
-    st.markdown("### Sources")
+    # Source cards — anchored so inline citation links scroll here on click.
+    _render_section_heading(st, "Sources", known)
     st.markdown(source_cards_html(report.get("sources") or []), unsafe_allow_html=True)
 
     # Run manifest + re-run prefill
@@ -981,7 +1085,7 @@ def _render_report(
     # Follow-up questions
     follow_ups: list[str] = report.get("follow_up_questions", [])
     if follow_ups:
-        st.markdown(f"### {icon_html('lightbulb')} Follow-up Questions", unsafe_allow_html=True)
+        _render_section_heading(st, "Follow-up Questions", known)
         fcols = st.columns(min(3, len(follow_ups)))
         for i, q in enumerate(follow_ups):
             col_idx = i % len(fcols)

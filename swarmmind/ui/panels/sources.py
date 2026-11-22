@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import threading
 from typing import Any
@@ -39,6 +40,30 @@ _STATUS_INDICATORS: dict[str, str] = {
     "ready": "check-circle",
     "error": "x-circle",
 }
+
+# Short, distinct and accessible labels for each ingestion state.
+_STATUS_LABELS: dict[str, str] = {
+    "pending": "Pending — queued",
+    "processing": "Processing — ingesting",
+    "ready": "Ready — searchable",
+    "error": "Error — ingestion failed",
+}
+
+
+def _esc(value: Any) -> str:
+    return html.escape("" if value is None else str(value), quote=True)
+
+
+def status_label(status: str) -> str:
+    """Return a human- and screen-reader-friendly ingestion status label."""
+    key = str(status or "pending").strip().lower()
+    return _STATUS_LABELS.get(key, f"Unknown status — {key or 'unspecified'}")
+
+
+def status_css(status: str) -> str:
+    """Map an ingestion status to a safe CSS modifier class."""
+    key = str(status or "pending").strip().lower()
+    return key if key in _STATUS_LABELS else "pending"
 
 # ---------------------------------------------------------------------------
 # Main render function
@@ -187,7 +212,7 @@ def render_sources_panel(st: Any, state: dict[str, Any]) -> None:
         "Enable web search / page fetching",
         value=fetch_default,
         key="sources_web_search",
-        help="Opt in to external lookups. When off, results stay 100% local.",
+        help="Allow the Web worker to fetch public pages as sources. Turn off to keep lookups local.",
     )
     if web_cfg is not None and web_enabled != fetch_default:
         try:
@@ -200,7 +225,7 @@ def render_sources_panel(st: Any, state: dict[str, Any]) -> None:
             st.session_state.chat_web_search = False
         st.rerun()
     if web_enabled:
-        st.caption("External lookups enabled — fetched page content may leave this machine.")
+        st.caption("External lookup is on — web pages may be fetched as sources.")
     st.slider(
         "RAG top-K",
         min_value=1,
@@ -303,6 +328,10 @@ def _render_add_source_form(
             key="source_url_input",
         )
 
+    st.caption(
+        "Files and pasted text stay on this machine. Web URLs are fetched "
+        "only when external lookup is enabled in Settings."
+    )
     if st.button(
         "Add Source",
         type="primary",
@@ -489,15 +518,19 @@ def _render_source_row(st: Any, source: Source) -> None:
     icon_markup = icon_html(icon_name, "regular", "1.2em")
     display = source.display_name or source.source_uri[:40]
 
+    label = status_label(status)
+    css = status_css(status)
+
     col1, col2 = st.columns([4, 1])
     with col1:
         st.markdown(
-            f"{icon_markup}  {display}",
+            f"{icon_markup}  {_esc(display)}",
             unsafe_allow_html=True,
         )
     with col2:
         st.markdown(
-            f'<span role="status" aria-label="Ingestion status: {status}">'
-            f"{indicator} <small>{status}</small></span>",
+            f'<span class="ingest-status ingest-status--{css}" role="status" '
+            f'aria-label="Ingestion status: {_esc(label)}">'
+            f"{indicator} <span>{_esc(label)}</span></span>",
             unsafe_allow_html=True,
         )
