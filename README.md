@@ -127,6 +127,8 @@ Open http://localhost:8501 in your browser.
 
 SwarmMind stores configuration at `~/.swarmmind/config.toml`:
 
+> Any GGUF/FLM/Omni model registered in Lemonade can be used — see [docs/MODELS.md](docs/MODELS.md).
+
 ```toml
 [lemonade]
 host = "localhost"
@@ -319,6 +321,7 @@ Apache 2.0 — see [LICENSE](LICENSE) for full terms.
 | Document | Description |
 |---|---|
 | [Quickstart](docs/QUICKSTART.md) | Clone-to-cited-report in 5 minutes (incl. no-AMD mock server) |
+| [Models](docs/MODELS.md) | SwarmMind↔Lemonade model boundary; add GGUF/FLM/Omni models and pin them in config |
 | [Setup Guide](SETUP.md) | Judge setup instructions, detailed configuration |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Symptom → cause → exact fix, `swarmmind doctor` first |
 | [CHANGELOG.md](CHANGELOG.md) | TDD audit fixes and methodology |

@@ -131,8 +131,16 @@ swarmmind web
 The UI shows clickable citations, a grounding badge, a Sources appendix with
 exact snippets, and an opt-in **Read aloud** button (Lemonade TTS).
 
+## Using your own GGUF model
+
+SwarmMind doesn't download models — it sends model names to Lemonade. To use a
+Hugging Face GGUF (e.g. an Unsloth quant) or an FLM/Omni model, register it in
+Lemonade with `lemonade pull` and put its name in `~/.swarmmind/config.toml`.
+See [MODELS.md](MODELS.md) for exact commands, config examples and caveats.
+
 ## Next steps
 
+- [MODELS.md](MODELS.md) — add and pin your own GGUF/FLM/Omni models
 - [SETUP.md](../SETUP.md) — detailed setup and configuration
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — symptom → cause → fix
 - [COMPATIBILITY.md](COMPATIBILITY.md) — Lemonade release matrix

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Model-support guide** (`docs/MODELS.md`) — documents the SwarmMind↔Lemonade
+  model boundary, per-role endpoints, exact CLI commands to register HF GGUF,
+  `user.*`, vision (mmproj), FLM NPU and Omni-collection models, config pinning
+  and verification; cross-linked from `README.md` and `docs/QUICKSTART.md`.
+- **`swarmmind doctor` configured-model check** — verifies that the model names
+  in `config.toml` are visible on the Lemonade server (alongside the capability
+  and backend probe).
 - **Upstream watch doc** (`docs/UPSTREAM-WATCH.md`) — dated, sourced record of
   Lemonade stable/RC releases, issues and PRs, mapped to SwarmMind's current
   behaviour; cross-linked from `ECOSYSTEM-RESEARCH.md` and `TROUBLESHOOTING.md`.
