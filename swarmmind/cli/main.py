@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -24,6 +25,10 @@ from swarmmind.rag.chroma_store import ChromaStore
 console = Console()
 DATA_DIR = Path.home() / ".swarmmind"
 
+# Project IDs are free-form strings in the data layer (the default is a UUID).
+# The CLI accepts a caller-supplied ID but keeps it URL/shell friendly.
+_PROJECT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
 
 def _get_config() -> Config:
     """Load and return the application config."""
@@ -44,7 +49,10 @@ def _get_chroma() -> ChromaStore:
 
 def _get_client(config: Config) -> LemonadeClient:
     """Return a LemonadeClient from config."""
-    return LemonadeClient(config.get_lemonade_base_url())
+    return LemonadeClient(
+        config.get_lemonade_base_url(),
+        api_key=config.lemonade.api_key or None,
+    )
 
 
 # -----------------------------------------------------------------------
@@ -66,7 +74,8 @@ def main() -> None:
 @click.option("--project-id", "-p", default=None, help="Project ID for context.")
 @click.option("--no-web", is_flag=True, help="Disable web search.")
 @click.option("--sequential", is_flag=True, help="Run workers sequentially (safer on low-RAM systems).")
-def ask(query: str, project_id: Optional[str], no_web: bool, sequential: bool) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Print the raw report as JSON instead of rendering it.")
+def ask(query: str, project_id: Optional[str], no_web: bool, sequential: bool, as_json: bool) -> None:
     """Run a research query and display the report."""
     async def _run() -> None:
         from swarmmind.config import ExecutionConfig
@@ -89,24 +98,34 @@ def ask(query: str, project_id: Optional[str], no_web: bool, sequential: bool) -
             await db.connect()
             project = await db.get_project(project_id)
             if project:
-                project_context = project.model_dump()
+                # model_dump_json() serialises datetimes to strings; the
+                # conductor embeds this dict in a JSON prompt.
+                project_context = json.loads(project.model_dump_json())
             await db.close()
 
         orchestrator = Orchestrator(config, client, chroma_store=chroma)
 
         try:
-            with console.status("[bold green]Researching…") as status:
-
-                def progress(status_str: str, detail: dict[str, Any]) -> None:
-                    msg = detail.get("message", status_str)
-                    status.update(f"[bold green]{msg}")
-
+            if as_json:
+                # Machine-readable mode: keep stdout free of live status output.
                 report = await orchestrator.run(
                     query=query,
                     project_context=project_context,
                     web_search_enabled=not no_web,
-                    progress_callback=progress,
                 )
+            else:
+                with console.status("[bold green]Researching…") as status:
+
+                    def progress(status_str: str, detail: dict[str, Any]) -> None:
+                        msg = detail.get("message", status_str)
+                        status.update(f"[bold green]{msg}")
+
+                    report = await orchestrator.run(
+                        query=query,
+                        project_context=project_context,
+                        web_search_enabled=not no_web,
+                        progress_callback=progress,
+                    )
         except (ConnectionError, OSError) as exc:
             console.print(f"[red]Error: Cannot reach Lemonade server.[/red]")
             console.print(f"[dim]{exc}[/dim]")
@@ -116,6 +135,10 @@ def ask(query: str, project_id: Optional[str], no_web: bool, sequential: bool) -
         except Exception as exc:
             console.print(f"[red]Unexpected error: {exc}[/red]")
             raise SystemExit(1)
+
+        if as_json:
+            click.echo(json.dumps(report, default=str))
+            return
 
         # Display the report
         console.print()
@@ -164,14 +187,35 @@ def project() -> None:
 @click.argument("name")
 @click.option("--description", "-d", default="", help="Project description.")
 @click.option("--no-web", is_flag=True, help="Disable web search.")
-def create(name: str, description: str, no_web: bool) -> None:
+@click.option(
+    "--id", "-i", "project_id", default=None,
+    help="Custom project ID (letters, digits, '.', '_' and '-'; default: auto-generated UUID).",
+)
+def create(name: str, description: str, no_web: bool, project_id: Optional[str]) -> None:
     """Create a new project."""
+    if project_id is not None and not _PROJECT_ID_RE.fullmatch(project_id):
+        raise click.BadParameter(
+            "use only letters, digits, '.', '_' and '-' (max 128 chars, "
+            "starting with a letter or digit)",
+            param_hint="--id",
+        )
+
     async def _run() -> None:
         db = _get_db()
-        await db.init_db()
-        proj = Project(name=name, description=description, web_search_enabled=not no_web)
-        proj = await db.create_project(proj)
-        await db.close()
+        try:
+            await db.init_db()
+            if project_id and await db.get_project(project_id) is not None:
+                console.print(f"[red]Error: a project with id '{project_id}' already exists.[/red]")
+                raise SystemExit(1)
+            proj = Project(
+                id=project_id or "",
+                name=name,
+                description=description,
+                web_search_enabled=not no_web,
+            )
+            proj = await db.create_project(proj)
+        finally:
+            await db.close()
         console.print(f"[green]Created project[/green] [bold]{proj.name}[/bold] (id: {proj.id})")
 
     asyncio.run(_run())
@@ -237,21 +281,70 @@ def source() -> None:
 @click.argument("source-uri")
 @click.option("--name", "-n", default="", help="Display name.")
 def add(project_id: str, source_type: str, source_uri: str, name: str) -> None:
-    """Add a source to a project."""
+    """Add a source to a project and ingest it so RAG can find it immediately."""
     from swarmmind.data.models import Source
+    from swarmmind.rag.pipeline import Pipeline
 
     async def _run() -> None:
         db = _get_db()
-        await db.init_db()
-        src = Source(
-            project_id=project_id,
-            source_type=source_type,
-            source_uri=source_uri,
-            display_name=name or source_uri.rsplit("/", 1)[-1],
+        try:
+            await db.init_db()
+            if await db.get_project(project_id) is None:
+                console.print(
+                    f"[red]Error: project '{project_id}' does not exist. "
+                    "Create it first with `swarmmind project create NAME "
+                    f"--id {project_id}`.[/red]"
+                )
+                raise SystemExit(1)
+            src = Source(
+                project_id=project_id,
+                source_type=source_type,
+                source_uri=source_uri,
+                display_name=name or source_uri.rsplit("/", 1)[-1],
+            )
+            src = await db.create_source(src)
+        finally:
+            await db.close()
+
+        # Ingest synchronously. Raw `text` sources are passed as bytes (the
+        # pipeline's str path is interpreted as a file path).
+        try:
+            ingest_input: str | bytes = (
+                source_uri.encode("utf-8") if source_type == "text" else source_uri
+            )
+            result = await Pipeline(_get_config(), _get_chroma()).process_source(
+                source_type, ingest_input, src.id, project_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - report errors, never a traceback
+            result = {"status": "error", "error": str(exc), "char_count": 0, "chunk_count": 0}
+
+        if result.get("status") != "ready":
+            error = result.get("error") or "unknown ingestion error"
+            db = _get_db()
+            try:
+                await db.init_db()
+                await db.update_source_status(
+                    src.id, "error", error_message=str(error),
+                )
+            finally:
+                await db.close()
+            console.print(f"[red]Error: could not ingest source: {error}[/red]")
+            raise SystemExit(1)
+
+        chunks = int(result.get("chunk_count", 0))
+        chars = int(result.get("char_count", 0))
+        db = _get_db()
+        try:
+            await db.init_db()
+            await db.update_source_status(
+                src.id, "ready", char_count=chars, chunk_count=chunks,
+            )
+        finally:
+            await db.close()
+        console.print(
+            f"[green]Added source[/green] [bold]{src.display_name}[/bold] (id: {src.id}) "
+            f"— status: ready, {chunks} chunk(s), {chars} chars"
         )
-        src = await db.create_source(src)
-        await db.close()
-        console.print(f"[green]Added source[/green] [bold]{src.display_name}[/bold] (id: {src.id})")
 
     asyncio.run(_run())
 

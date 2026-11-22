@@ -91,9 +91,77 @@ asyncio.run(check())
 " 2>&1
 echo ""
 
-# 5. Test full CLI pipeline (ask a simple question)
-echo "🔍 [5/6] Testing CLI pipeline..."
-$VENV/swarmmind ask "What is the capital of France?" --no-web 2>&1 || echo "       (CLI test completed or skipped)"
+# 5. Test full CLI pipeline end-to-end, with real citations asserted
+echo "🔍 [5/6] Testing CLI pipeline (grounded, cited report)..."
+SMOKE_ID="smoke-proj-$$-$(date +%s)"
+SMOKE_FACT="The capital of France is Paris."
+$VENV/swarmmind project create "Smoke Test Project $SMOKE_ID" --id "$SMOKE_ID" 2>&1 || {
+    echo "       ❌ project create failed"
+    exit 1
+}
+$VENV/swarmmind source add "$SMOKE_ID" text "$SMOKE_FACT" --name "Smoke fact" 2>&1 || {
+    echo "       ❌ source add failed"
+    exit 1
+}
+SMOKE_REPORT_JSON="$($VENV/swarmmind ask "What is the capital of France?" --project-id "$SMOKE_ID" --no-web --json 2>/dev/null)" || {
+    echo "       ❌ ask failed"
+    exit 1
+}
+export SMOKE_REPORT_JSON
+
+$VENV/python - <<'PY'
+import json
+import os
+import sys
+
+raw = os.environ.get("SMOKE_REPORT_JSON", "")
+if not raw.strip():
+    print("       FAIL: ask produced no JSON report")
+    sys.exit(1)
+try:
+    report = json.loads(raw)
+except json.JSONDecodeError as exc:
+    print(f"       FAIL: ask output is not valid JSON: {exc}")
+    sys.exit(1)
+
+failures: list[str] = []
+
+
+def check(label: str, ok: bool) -> None:
+    print(f"       {'PASS' if ok else 'FAIL'}: {label}")
+    if not ok:
+        failures.append(label)
+
+
+sources = report.get("sources") or []
+check("report has a non-empty sources list", isinstance(sources, list) and bool(sources))
+source_ids = {
+    str(s.get("id")) for s in sources if isinstance(s, dict) and s.get("id")
+}
+
+section_ids: list[str] = []
+for section in report.get("sections") or []:
+    if isinstance(section, dict):
+        section_ids.extend(str(s) for s in (section.get("sources") or []))
+check(
+    "every sections[].sources ID exists in sources",
+    bool(section_ids) and all(sid in source_ids for sid in section_ids),
+)
+
+grounding = report.get("grounding") or {}
+try:
+    total_claims = int(grounding.get("total_claims", 0))
+except (TypeError, ValueError):
+    total_claims = 0
+check("grounding.total_claims > 0", total_claims > 0)
+
+check(
+    "title came from the mock synthesis path (not fallback)",
+    report.get("title") == "Mock grounded research report",
+)
+
+sys.exit(1 if failures else 0)
+PY
 echo ""
 
 # 6. Test Web UI starts
