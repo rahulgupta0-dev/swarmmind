@@ -25,6 +25,14 @@ def _ensure_loop():
             import time
             time.sleep(0.01)
 
+@atexit.register
+def _shutdown_background_loop() -> None:
+    """Stop the persistent loop so the interpreter can exit cleanly."""
+    loop = _loop
+    if loop is not None and loop.is_running():
+        loop.call_soon_threadsafe(loop.stop)
+
+
 def run_async(coro):
     """Safely run async functions in Streamlit using a persistent background loop."""
     _ensure_loop()

@@ -8,7 +8,26 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import AsyncIterator, Optional
 
+import threading
+
 import aiosqlite
+import aiosqlite.core
+
+# aiosqlite starts one non-daemon worker thread per connection. If a caller
+# forgets ``close()`` (common in tests and on abrupt Streamlit shutdown), that
+# thread keeps the interpreter alive forever. Use daemon worker threads for all
+# aiosqlite connections in this process; explicit ``close()`` still stops them
+# cleanly, but a missed close can no longer hang shutdown.
+class _DaemonThread(threading.Thread):
+    """Thread that never blocks interpreter shutdown."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        kwargs.setdefault("daemon", True)
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+
+
+if aiosqlite.core.Thread is not _DaemonThread:  # pragma: no branch
+    aiosqlite.core.Thread = _DaemonThread  # type: ignore[assignment]
 
 from swarmmind.data.models import Conversation, Note, Project, Source
 
