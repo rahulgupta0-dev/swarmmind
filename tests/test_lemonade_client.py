@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -304,4 +306,120 @@ class TestLemonadeConfigApiKey:
             api_key=config.lemonade.api_key or None,
         )
         assert "Authorization" not in client._make_client().headers
+
+
+class TestStreamOptionsAndUsage:
+    """FLM 1.0.10+ opt-in usage (Lemonade v2026.46.2, PR #4037)."""
+
+    @staticmethod
+    def _patch_transport(
+        monkeypatch: Any,
+        lines: list[str],
+        captured: dict[str, Any],
+    ) -> None:
+        class FakeStreamResponse:
+            def raise_for_status(self) -> None:
+                pass
+
+            async def aiter_lines(self) -> Any:
+                for line in lines:
+                    yield line
+
+        @asynccontextmanager
+        async def fake_stream(self: Any, method: str, url: str, **kwargs: Any) -> Any:
+            captured["stream"] = kwargs.get("json")
+            yield FakeStreamResponse()
+
+        class FakeResponse:
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict[str, Any]:
+                return {"ok": True}
+
+        async def fake_request(self: Any, method: str, url: str, **kwargs: Any) -> Any:
+            captured["request"] = kwargs.get("json")
+            return FakeResponse()
+
+        monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
+        monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+
+    @pytest.mark.asyncio
+    async def test_stream_options_present_only_for_streaming(self, monkeypatch: Any) -> None:
+        from swarmmind.lemonade.client import LemonadeClient
+
+        captured: dict[str, Any] = {}
+        self._patch_transport(monkeypatch, ["data: [DONE]"], captured)
+        client = LemonadeClient("http://localhost:13305")
+        messages = [{"role": "user", "content": "hi"}]
+
+        stream_gen = await client.chat_completion("m", messages, stream=True)
+        assert [chunk async for chunk in stream_gen] == []
+        assert captured["stream"]["stream_options"] == {"include_usage": True}
+        assert captured["stream"]["stream"] is True
+
+        await client.chat_completion("m", messages, stream=False)
+        assert "stream_options" not in captured["request"]
+
+    @pytest.mark.asyncio
+    async def test_usage_chunk_populates_last_usage_without_being_yielded(
+        self, monkeypatch: Any,
+    ) -> None:
+        from swarmmind.lemonade.client import LemonadeClient
+
+        content_chunk = {
+            "choices": [{"delta": {"content": "Hello"}, "finish_reason": None}],
+        }
+        usage_chunk = {
+            "choices": [],
+            "usage": {
+                "completion_tokens": 7,
+                "prompt_tokens": 3,
+                "total_tokens": 10,
+            },
+        }
+        lines = [
+            f"data: {json.dumps(content_chunk)}",
+            f"data: {json.dumps(usage_chunk)}",
+            "data: [DONE]",
+        ]
+        captured: dict[str, Any] = {}
+        self._patch_transport(monkeypatch, lines, captured)
+        client = LemonadeClient("http://localhost:13305")
+        assert client.last_usage == {}
+
+        gen = await client.chat_completion(
+            "m", [{"role": "user", "content": "hi"}], stream=True,
+        )
+        chunks = [chunk async for chunk in gen]
+
+        assert chunks == [content_chunk]
+        assert client.last_usage["completion_tokens"] == 7
+        assert client.last_usage["prompt_tokens"] == 3
+        assert client.last_usage["total_tokens"] == 10
+
+    @pytest.mark.asyncio
+    async def test_consuming_usage_resets_it(self, monkeypatch: Any) -> None:
+        from swarmmind.lemonade.client import LemonadeClient
+
+        usage_chunk = {
+            "usage": {
+                "completion_tokens": 5,
+                "prompt_tokens": 2,
+                "total_tokens": 7,
+            },
+        }
+        captured: dict[str, Any] = {}
+        self._patch_transport(
+            monkeypatch,
+            [f"data: {json.dumps(usage_chunk)}", "data: [DONE]"],
+            captured,
+        )
+        client = LemonadeClient("http://localhost:13305")
+        gen = await client.chat_completion(
+            "m", [{"role": "user", "content": "hi"}], stream=True,
+        )
+        assert [chunk async for chunk in gen] == []
+        assert client.consume_last_usage()["completion_tokens"] == 5
+        assert client.last_usage == {}
 

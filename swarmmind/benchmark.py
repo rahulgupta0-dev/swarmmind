@@ -205,6 +205,55 @@ class BenchmarkReport(BaseModel):
 # =============================================================================
 
 
+def _consume_usage(client: Any) -> dict[str, Any]:
+    """Consume (read and clear) token usage from *client*.
+
+    The real :class:`LemonadeClient` exposes ``consume_last_usage()``;
+    lightweight mocks may only provide a plain ``last_usage`` attribute.
+    Both are supported so measurements never re-use a previous run's usage.
+    """
+    consumer = getattr(client, "consume_last_usage", None)
+    if callable(consumer):
+        try:
+            return consumer() or {}
+        except Exception:  # pragma: no cover - defensive for odd mocks
+            return {}
+    usage = getattr(client, "last_usage", None)
+    try:
+        setattr(client, "last_usage", {})
+    except Exception:
+        pass  # read-only property without a consumer: best effort
+    return dict(usage) if isinstance(usage, dict) else {}
+
+
+def _real_completion_tokens(client: Any) -> int | None:
+    """Return the server-reported completion-token count, if available.
+
+    ``None`` means the server did not report usable usage and the caller
+    should fall back to its own word-count estimate.
+    """
+    usage = getattr(client, "last_usage", None)
+    if not isinstance(usage, dict):
+        return None
+    value = usage.get("completion_tokens")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value < 0:
+        return None
+    return int(value)
+
+
+def _finalize_tokens(client: Any, estimated_tokens: int) -> int:
+    """Prefer real usage over *estimated_tokens*, then clear the usage.
+
+    Consuming here (once per measurement) keeps cumulative totals correct and
+    prevents the same server-reported count from being counted twice.
+    """
+    real = _real_completion_tokens(client)
+    _consume_usage(client)
+    return real if real is not None else estimated_tokens
+
+
 async def _measure_load_and_chat(
     client: LemonadeClient,
     role: str,
@@ -260,6 +309,10 @@ async def _measure_load_and_chat(
                 if content:
                     total_tokens += len(content.split())
 
+        # Prefer the server's real completion-token count (opt-in via
+        # stream_options.include_usage); fall back to the word estimate.
+        total_tokens = _finalize_tokens(client, total_tokens)
+
         chat_end = time.monotonic()
         wall_seconds = chat_end - chat_start
 
@@ -271,7 +324,7 @@ async def _measure_load_and_chat(
             model=model,
             backend=backend,
             load_seconds=load_seconds,
-            total_tokens=total_tokens,
+            total_tokens=_finalize_tokens(client, total_tokens),
             wall_seconds=wall_seconds,
             success=False,
             error=str(exc),
@@ -326,7 +379,9 @@ async def _run_parallel_swarm_test(
                         count += len(content.split())
         except Exception as exc:
             logger.warning("Parallel stream failed: %s", exc)
-        return count
+        # Use this stream's server-reported usage when available, then clear
+        # it so the next concurrent stream cannot double-count the same value.
+        return _finalize_tokens(client, count)
 
     task_results = await asyncio.gather(
         *[_one_stream() for _ in range(concurrency)],

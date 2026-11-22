@@ -52,6 +52,7 @@ class MockBenchmarkClient:
         stream_delay: float = 0.001,
         fail_load: bool = False,
         fail_chat: bool = False,
+        usage_completion_tokens: int | None = None,
     ) -> None:
         self.load_calls = 0
         self.chat_calls = 0
@@ -59,9 +60,17 @@ class MockBenchmarkClient:
         self.stream_delay = stream_delay
         self.fail_load = fail_load
         self.fail_chat = fail_chat
+        # Optional server-reported usage (set at the end of each stream).
+        self.usage_completion_tokens = usage_completion_tokens
+        self.last_usage: dict[str, Any] = {}
         # Track active concurrent streams for parallel concurrency tests
         self._active_chat_count = 0
         self._max_concurrent = 0
+
+    def consume_last_usage(self) -> dict[str, Any]:
+        """Mirror LemonadeClient.consume_last_usage for the mock."""
+        usage, self.last_usage = self.last_usage, {}
+        return dict(usage)
 
     async def load_model(self, model: str) -> dict[str, Any]:
         """Simulate model load (instant or delayed)."""
@@ -151,6 +160,12 @@ class MockBenchmarkClient:
             }
         finally:
             self._active_chat_count -= 1
+            if self.usage_completion_tokens is not None:
+                self.last_usage = {
+                    "completion_tokens": self.usage_completion_tokens,
+                    "prompt_tokens": 4,
+                    "total_tokens": self.usage_completion_tokens + 4,
+                }
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +609,86 @@ class TestRunBenchmark:
         for r in role_results:
             assert r.first_token_seconds is not None
             assert r.first_token_seconds >= 0
+
+
+# =========================================================================
+# Tests: server-reported token usage
+# =========================================================================
+
+
+class TestBenchmarkUsageTokens:
+    """Benchmark prefers real completion tokens, with a word-count fallback."""
+
+    @pytest.mark.asyncio
+    async def test_uses_real_usage_tokens_for_tokens_and_rate(self) -> None:
+        from swarmmind.benchmark import _measure_load_and_chat
+
+        client = MockBenchmarkClient(usage_completion_tokens=37)
+        result = await _measure_load_and_chat(
+            client, "conductor", "m", "rocm", "test prompt",
+        )
+
+        assert result.success is True
+        assert result.total_tokens == 37
+        assert result.tokens_per_second > 0
+        # Throughput is derived from the real count, not the 10-word estimate.
+        assert result.tokens_per_second * result.wall_seconds == pytest.approx(37)
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_word_count_without_usage(self) -> None:
+        from swarmmind.benchmark import _measure_load_and_chat
+
+        client = MockBenchmarkClient()  # no last_usage -> fallback
+        result = await _measure_load_and_chat(
+            client, "conductor", "m", "rocm", "test prompt",
+        )
+
+        assert result.total_tokens == 10  # the mock stream's word count
+
+    @pytest.mark.asyncio
+    async def test_usage_is_consumed_between_measurements(self) -> None:
+        from swarmmind.benchmark import _measure_load_and_chat
+
+        client = MockBenchmarkClient()
+        # Simulate a stale usage value left over from a previous run.
+        client.last_usage = {
+            "completion_tokens": 50,
+            "prompt_tokens": 1,
+            "total_tokens": 51,
+        }
+        first = await _measure_load_and_chat(client, "a", "m", "rocm", "p")
+        second = await _measure_load_and_chat(client, "b", "m", "rocm", "p")
+
+        assert first.total_tokens == 50
+        assert second.total_tokens == 10  # consumed -> fallback, no double count
+        assert client.last_usage == {}
+
+    @pytest.mark.asyncio
+    async def test_parallel_swarm_uses_real_usage(self) -> None:
+        from swarmmind.benchmark import _run_parallel_swarm_test
+
+        client = MockBenchmarkClient(usage_completion_tokens=23)
+        result = await _run_parallel_swarm_test(
+            client, "m", "rocm", "test prompt", 2,
+        )
+
+        assert result.total_tokens == 46  # 2 streams * 23 real tokens
+
+    @pytest.mark.asyncio
+    async def test_full_benchmark_falls_back_with_mock_client(self) -> None:
+        from swarmmind.benchmark import run_benchmark
+
+        report = await run_benchmark(
+            client=MockBenchmarkClient(),  # type: ignore[arg-type]
+            hardware=AMD_OPTIMIZED_HW,
+            config=Config(),  # type: ignore[call-arg]
+            prompt="test",
+        )
+        phase_b = [
+            r for r in report.results
+            if r.role in {"conductor", "worker", "embeddings", "image", "tts"}
+        ]
+        assert phase_b and all(r.total_tokens == 10 for r in phase_b)
 
 
 # =========================================================================

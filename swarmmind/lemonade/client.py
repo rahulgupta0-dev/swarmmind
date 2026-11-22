@@ -50,6 +50,30 @@ class LemonadeClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self._timeout = timeout
+        # Token usage reported by the server in the final SSE chunk of a
+        # streamed chat completion.  Empty until the first such chunk is seen.
+        self._last_usage: dict[str, Any] = {}
+
+    @property
+    def last_usage(self) -> dict[str, Any]:
+        """Usage from the most recent streamed chat completion (read-only).
+
+        Returns a copy so callers cannot mutate the client's internal state.
+        ``{}`` when no streaming response has reported usage yet.  Use
+        :meth:`consume_last_usage` to read *and* clear it (measurement code
+        uses this to avoid counting the same usage twice).
+        """
+        return dict(self._last_usage)
+
+    def consume_last_usage(self) -> dict[str, Any]:
+        """Return the captured usage and reset it to ``{}``.
+
+        Benchmark measurements call this once per streamed run so a stale
+        value can never leak into a subsequent measurement.
+        """
+        usage = dict(self._last_usage)
+        self._last_usage = {}
+        return usage
 
     # ------------------------------------------------------------------
     # Internal: auth + low-level request with graceful degradation
@@ -209,6 +233,15 @@ class LemonadeClient:
             **kwargs,
         }
 
+        # FLM 1.0.10+ (Lemonade v2026.46.2, PR #4037) only emits the final
+        # SSE chunk carrying token ``usage`` when the request opts in with
+        # ``stream_options.include_usage``.  Add it for streaming requests
+        # only: non-streaming calls keep their exact previous body, and
+        # servers that do not understand the field simply ignore it.  An
+        # explicit caller-supplied ``stream_options`` always wins.
+        if stream and "stream_options" not in body:
+            body["stream_options"] = {"include_usage": True}
+
         if stream:
             return self._stream_chat(body)
 
@@ -239,7 +272,36 @@ class LemonadeClient:
                         payload = line[6:].strip()
                         if payload == "[DONE]":
                             return
-                        yield json.loads(payload)
+                        chunk = json.loads(payload)
+                        if not isinstance(chunk, dict):
+                            continue
+                        # The opt-in usage chunk (often ``{"choices": [],
+                        # "usage": {...}}``) is metadata, not text.  Capture
+                        # it on the client and do NOT yield it to callers so
+                        # the async generator keeps yielding only real
+                        # content deltas as before.
+                        usage = chunk.get("usage")
+                        if isinstance(usage, dict):
+                            self._last_usage = self._normalize_usage(usage)
+                            continue
+                        yield chunk
+
+    @staticmethod
+    def _normalize_usage(usage: dict[str, Any]) -> dict[str, Any]:
+        """Return a usage dict containing at least the three token counts.
+
+        Servers may omit individual fields; missing ones default to ``0`` so
+        benchmarking code can rely on ``completion_tokens`` being present.
+        Any extra fields the server reports are preserved.
+        """
+        normalized: dict[str, Any] = dict(usage)
+        for key in ("completion_tokens", "prompt_tokens", "total_tokens"):
+            value = normalized.get(key, 0)
+            try:
+                normalized[key] = int(value)
+            except (TypeError, ValueError):
+                normalized[key] = 0
+        return normalized
 
     # ------------------------------------------------------------------
     # Embeddings
