@@ -1,9 +1,18 @@
 """Pydantic models for SwarmMind data layer."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
+
+
+def utc_now() -> datetime:
+    """Return the current time as a timezone-aware UTC datetime.
+
+    Shared by the data layer so model defaults and database-generated
+    timestamps use the same, non-deprecated, representation.
+    """
+    return datetime.now(timezone.utc)
 
 
 class Project(BaseModel):
@@ -13,8 +22,8 @@ class Project(BaseModel):
     name: str = Field(..., description="Human-readable project name.")
     description: str = Field(default="", description="Optional project description.")
     web_search_enabled: bool = Field(default=True, description="Allow web search workers.")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class Source(BaseModel):
@@ -35,7 +44,7 @@ class Source(BaseModel):
     char_count: int = Field(default=0)
     chunk_count: int = Field(default=0)
     error_message: Optional[str] = Field(default=None)
-    added_at: datetime = Field(default_factory=datetime.utcnow)
+    added_at: datetime = Field(default_factory=utc_now)
 
 
 class Conversation(BaseModel):
@@ -47,7 +56,7 @@ class Conversation(BaseModel):
     web_search_used: bool = Field(default=False)
     worker_count: int = Field(default=0, description="Number of workers spawned.")
     report_json: str = Field(default="", description="Full research report as JSON.")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Note(BaseModel):
@@ -57,5 +66,5 @@ class Note(BaseModel):
     project_id: str = Field(..., description="FK — owning project.")
     title: str = Field(default="", description="Note title.")
     content: str = Field(default="", description="Note body (Markdown).")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

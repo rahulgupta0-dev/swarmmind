@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 
 import threading
@@ -29,7 +29,7 @@ class _DaemonThread(threading.Thread):
 if aiosqlite.core.Thread is not _DaemonThread:  # pragma: no branch
     aiosqlite.core.Thread = _DaemonThread  # type: ignore[assignment]
 
-from swarmmind.data.models import Conversation, Note, Project, Source
+from swarmmind.data.models import Conversation, Note, Project, Source, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,21 @@ class Database:
 
     @staticmethod
     def _ts(dt: Optional[datetime] = None) -> str:
-        return (dt or datetime.utcnow()).isoformat()
+        """Serialise a datetime to an ISO string for SQLite storage."""
+        return (dt or utc_now()).isoformat()
+
+    @staticmethod
+    def _parse_ts(value: str) -> datetime:
+        """Parse a stored ISO timestamp into an aware datetime.
+
+        Legacy rows were written with the deprecated ``datetime.utcnow()``
+        and therefore contain naive ISO strings (no offset). Treat those as
+        UTC. Rows with an explicit offset are returned unchanged.
+        """
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
 
     @staticmethod
     def _row_to_project(row: aiosqlite.Row) -> Project:
@@ -169,8 +183,8 @@ class Database:
             name=row["name"],
             description=row["description"],
             web_search_enabled=bool(row["web_search_enabled"]),
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
+            created_at=Database._parse_ts(row["created_at"]),
+            updated_at=Database._parse_ts(row["updated_at"]),
         )
 
     @staticmethod
@@ -185,7 +199,7 @@ class Database:
             char_count=row["char_count"],
             chunk_count=row["chunk_count"],
             error_message=row["error_message"],
-            added_at=datetime.fromisoformat(row["added_at"]),
+            added_at=Database._parse_ts(row["added_at"]),
         )
 
     @staticmethod
@@ -197,7 +211,7 @@ class Database:
             web_search_used=bool(row["web_search_used"]),
             worker_count=row["worker_count"],
             report_json=row["report_json"] or "",
-            created_at=datetime.fromisoformat(row["created_at"]),
+            created_at=Database._parse_ts(row["created_at"]),
         )
 
     @staticmethod
@@ -207,8 +221,8 @@ class Database:
             project_id=row["project_id"],
             title=row["title"],
             content=row["content"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
+            created_at=Database._parse_ts(row["created_at"]),
+            updated_at=Database._parse_ts(row["updated_at"]),
         )
 
     # ------------------------------------------------------------------
@@ -275,7 +289,7 @@ class Database:
         if not source.id:
             source.id = self._new_id()
         if not source.added_at:
-            source.added_at = datetime.utcnow()
+            source.added_at = utc_now()
         now = self._ts(source.added_at)
         async with self.connection() as conn:
             await conn.execute(
@@ -353,7 +367,7 @@ class Database:
         if not conversation.id:
             conversation.id = self._new_id()
         if not conversation.created_at:
-            conversation.created_at = datetime.utcnow()
+            conversation.created_at = utc_now()
         now = self._ts(conversation.created_at)
         async with self.connection() as conn:
             await conn.execute(
@@ -403,7 +417,7 @@ class Database:
         if not note.id:
             note.id = self._new_id()
         if not note.created_at:
-            note.created_at = datetime.utcnow()
+            note.created_at = utc_now()
         if not note.updated_at:
             note.updated_at = note.created_at
         now = self._ts(note.created_at)

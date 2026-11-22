@@ -407,6 +407,103 @@ class TestDatabaseCRUD:
         assert len(await db.list_conversations(proj.id)) == 0
         assert len(await db.list_notes(proj.id)) == 0
 
+    # -- Timestamp timezone handling --------------------------------------------
+
+    def test_model_defaults_are_timezone_aware(self) -> None:
+        """Every model timestamp default is an aware, UTC datetime."""
+        from datetime import timezone
+
+        from swarmmind.data.models import Conversation, Note, Project, Source
+
+        project = Project(name="TZ")
+        source = Source(project_id="p", source_type="web", source_uri="u")
+        conversation = Conversation(project_id="p", query="q")
+        note = Note(project_id="p")
+
+        timestamps = (
+            project.created_at, project.updated_at,
+            source.added_at, conversation.created_at,
+            note.created_at, note.updated_at,
+        )
+        for ts in timestamps:
+            assert ts.tzinfo is timezone.utc
+            assert ts.utcoffset().total_seconds() == 0
+
+    @pytest.mark.asyncio
+    async def test_sqlite_roundtrip_preserves_utc(self, db: Any) -> None:
+        """Timestamps persisted through SQLite round-trip as aware UTC values."""
+        from datetime import datetime, timezone
+
+        from swarmmind.data.models import Project, Source
+
+        proj = await db.create_project(Project(name="TZ Roundtrip"))
+        src = await db.create_source(
+            Source(project_id=proj.id, source_type="web", source_uri="https://example.com"),
+        )
+
+        # Stored ISO strings must carry the UTC offset.
+        async with db.connection() as conn:
+            cursor = await conn.execute(
+                "SELECT created_at FROM projects WHERE id = ?", (proj.id,),
+            )
+            prow = await cursor.fetchone()
+            cursor = await conn.execute(
+                "SELECT added_at FROM sources WHERE id = ?", (src.id,),
+            )
+            srow = await cursor.fetchone()
+        assert prow is not None and srow is not None
+        assert prow["created_at"].endswith("+00:00")
+        assert srow["added_at"].endswith("+00:00")
+
+        fetched = await db.get_source(src.id)
+        assert fetched is not None
+        assert fetched.added_at.tzinfo is timezone.utc
+        assert fetched.added_at == src.added_at
+        # .isoformat() output is still consumable by fromisoformat/UI/CLI.
+        assert datetime.fromisoformat(fetched.added_at.isoformat()) == fetched.added_at
+
+    @pytest.mark.asyncio
+    async def test_legacy_naive_timestamp_parsed_as_utc(self, db: Any) -> None:
+        """A legacy naive ISO string in SQLite is read back as UTC."""
+        from datetime import datetime, timezone
+
+        naive = "2020-01-02T03:04:05.123456"
+        async with db.connection() as conn:
+            await conn.execute(
+                """INSERT INTO projects
+                   (id, name, description, web_search_enabled, created_at, updated_at)
+                   VALUES (?, ?, '', 1, ?, ?)""",
+                ("legacy-project", "Legacy", naive, naive),
+            )
+            await conn.commit()
+
+        fetched = await db.get_project("legacy-project")
+        assert fetched is not None
+        expected = datetime(2020, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc)
+        assert fetched.created_at == expected
+        assert fetched.updated_at == expected
+        assert fetched.created_at.tzinfo is timezone.utc
+
+    @pytest.mark.asyncio
+    async def test_aware_timestamp_with_offset_is_preserved(self, db: Any) -> None:
+        """A stored timestamp with a non-UTC offset keeps that offset on read."""
+        from datetime import datetime, timedelta
+
+        aware = "2021-06-07T08:09:10+02:00"
+        async with db.connection() as conn:
+            await conn.execute(
+                """INSERT INTO projects
+                   (id, name, description, web_search_enabled, created_at, updated_at)
+                   VALUES (?, ?, '', 1, ?, ?)""",
+                ("offset-project", "Offset", aware, aware),
+            )
+            await conn.commit()
+
+        fetched = await db.get_project("offset-project")
+        assert fetched is not None
+        assert fetched.created_at.utcoffset() == timedelta(hours=2)
+        assert fetched.created_at == datetime.fromisoformat(aware)
+
 
 # ===================================================================
 # Test 4 — ChromaStore CRUD
