@@ -352,6 +352,56 @@ def _load_report(conversation_id: str) -> dict:
         asyncio.run(db.close())
 
 
+def _grounding_line(report: dict) -> str:
+    """One-line grounding summary (handles legacy reports with no grounding)."""
+    grounding = report.get("grounding")
+    if not isinstance(grounding, dict):
+        claims = report.get("claims") or []
+        supported = sum(1 for c in claims if isinstance(c, dict) and c.get("status") == "supported")
+        grounding = {"total_claims": len(claims), "supported": supported}
+    total = grounding.get("total_claims", 0) or 0
+    if not total:
+        return "No claims recorded — verify unsupported statements before use."
+    return (
+        f"{grounding.get('supported', 0)}/{total} claims supported · "
+        f"{grounding.get('unverified', 0)} unverified · "
+        f"{grounding.get('contradicted', 0)} contradicted"
+    )
+
+
+def _manifest_lines(report: dict) -> list[str]:
+    """Markdown run-manifest lines for export/console."""
+    lines = [
+        f"- Stop reason: `{report.get('stop_reason', 'n/a')}`",
+        f"- Rounds used: `{report.get('rounds_used', 1)}`",
+        f"- Timestamp: {report.get('timestamp', 'n/a')}",
+    ]
+    if report.get("query"):
+        lines.append(f"- Query: {report['query']}")
+    return lines
+
+
+def _sources_markdown(report: dict) -> list[str]:
+    """Markdown Sources appendix with title/kind/url/snippet."""
+    sources = report.get("sources") or []
+    if not isinstance(sources, list) or not sources:
+        return ["## Sources", "", "_No sources were retrieved for this query._", ""]
+    lines = ["## Sources", ""]
+    for raw in sources:
+        src = raw if isinstance(raw, dict) else {"id": "S?", "title": str(raw), "url": str(raw), "kind": "web"}
+        sid = src.get("id", "S?")
+        lines.append(
+            f"- **[{sid}] {src.get('title', 'Untitled source')}** — "
+            f"`{src.get('kind', 'model')}`"
+            + (f" — {src.get('url')}" if src.get("url") else "")
+        )
+        snippet = " ".join(str(src.get("snippet", "")).split())
+        if snippet:
+            lines.append(f"  > {snippet}")
+    lines.append("")
+    return lines
+
+
 def _render_report(report: dict) -> None:
     """Print a stored report to the console (rich)."""
     console.print(Panel.fit(f"[bold]{report.get('title', 'Research Report')}", border_style="blue"))
@@ -374,6 +424,31 @@ def _render_report(report: dict) -> None:
         console.print("\n[bold magenta]Follow-up Questions[/bold magenta]")
         for q in report["follow_up_questions"]:
             console.print(f"- {q}")
+
+    # WP3 — grounding, Sources appendix and run manifest.
+    console.print("\n[bold cyan]Grounding[/bold cyan]")
+    console.print(_grounding_line(report))
+
+    sources = report.get("sources") or []
+    if isinstance(sources, list) and sources:
+        console.print("\n[bold cyan]Sources[/bold cyan]")
+        table = Table("ID", "Kind", "Title", "URL / path", "Snippet")
+        for raw in sources:
+            src = raw if isinstance(raw, dict) else {
+                "id": "S?", "kind": "web", "title": str(raw), "url": str(raw),
+            }
+            table.add_row(
+                str(src.get("id", "S?")),
+                str(src.get("kind", "model")),
+                str(src.get("title", ""))[:40],
+                str(src.get("url", ""))[:50],
+                " ".join(str(src.get("snippet", "")).split())[:60],
+            )
+        console.print(table)
+
+    console.print("\n[bold cyan]Run Manifest[/bold cyan]")
+    for line in _manifest_lines(report):
+        console.print(line)
 
 
 @report.command(name="show")
@@ -411,6 +486,10 @@ def export(conversation_id: str, output_path: str) -> None:
         lines += ["## Follow-up Questions", ""]
         lines += [f"- {q}" for q in report_dict["follow_up_questions"]]
         lines.append("")
+
+    lines += ["## Grounding", "", _grounding_line(report_dict), ""]
+    lines += _sources_markdown(report_dict)
+    lines += ["## Run Manifest", ""] + _manifest_lines(report_dict) + [""]
 
     md = "\n".join(lines).strip() + "\n"
     with open(output_path, "w", encoding="utf-8") as f:
@@ -471,3 +550,42 @@ def web() -> None:
 def benchmark(prompt: str, iterations: int, concurrency: int, out: Path | None) -> None:
     """Run an AMD-cross-backend benchmark against the configured Lemonade server."""
     asyncio.run(_benchmark_async(prompt, iterations, concurrency, out))
+
+
+# -----------------------------------------------------------------------
+# eval — golden-set quality evaluation (deterministic-primary)
+# -----------------------------------------------------------------------
+
+
+@main.command(name="eval")
+@click.option(
+    "--report", "show_report", is_flag=True,
+    help="Print the Markdown evaluation report to stdout.",
+)
+@click.option(
+    "--output", type=click.Path(path_type=Path), default=None,
+    help="Write the Markdown evaluation report to PATH.",
+)
+@click.option(
+    "--judge", is_flag=True,
+    help="Enable the secondary LLM-as-judge (uses a different, blinded model).",
+)
+def eval_cmd(show_report: bool, output: Path | None, judge: bool) -> None:
+    """Evaluate answer quality against the local golden set.
+
+    Primary metrics are deterministic and fully offline. With --judge, an
+    optional secondary LLM judge (a different model, blinded, order-randomized)
+    adds approximate faithfulness and answer-relevance scores.
+    """
+    from swarmmind.eval import render_report, run_eval
+
+    result = run_eval(enable_judge=judge)
+    markdown = render_report(result)
+
+    if output is not None:
+        output.write_text(markdown, encoding="utf-8")
+        console.print(f"[green]Evaluation report saved to {output}[/green]")
+
+    if show_report or output is None:
+        # Plain echo preserves the Markdown table (Rich would wrap cells).
+        click.echo(markdown)

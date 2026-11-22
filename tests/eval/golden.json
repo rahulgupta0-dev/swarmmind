@@ -1,0 +1,146 @@
+{
+  "version": "1.0",
+  "description": "SwarmMind v0.4 evaluation golden set. Eight offline queries with local source documents and key phrases drawn verbatim from each snippet. No network access is required.",
+  "queries": [
+    {
+      "id": "g1",
+      "query": "What does the Ryzen AI NPU accelerate?",
+      "key_phrases": ["accelerates local inference", "low power"],
+      "sources": [
+        {
+          "title": "Ryzen AI NPU overview",
+          "kind": "web",
+          "url": "sources/npu.txt",
+          "snippet": "The Ryzen AI NPU accelerates local inference for small and medium language models. It runs at very low power compared with a discrete GPU.",
+          "key_phrases": ["accelerates local inference", "low power"]
+        }
+      ]
+    },
+    {
+      "id": "g2",
+      "query": "How does RAG reduce hallucinations?",
+      "key_phrases": ["grounds answers in retrieved passages", "reduces hallucinations"],
+      "sources": [
+        {
+          "title": "RAG grounding notes",
+          "kind": "rag",
+          "url": "sources/rag.txt",
+          "snippet": "Retrieval-augmented generation grounds answers in retrieved passages from a private document index. RAG reduces hallucinations compared with an ungrounded model.",
+          "key_phrases": ["grounds answers in retrieved passages", "reduces hallucinations"]
+        },
+        {
+          "title": "Lemonade local server",
+          "kind": "web",
+          "url": "sources/lemonade.txt",
+          "snippet": "Lemonade is a local server that exposes OpenAI-compatible chat completion and embedding endpoints. It keeps model weights and inference on the user's machine.",
+          "key_phrases": ["local server"]
+        }
+      ]
+    },
+    {
+      "id": "g3",
+      "query": "Which backend suits a ROCm GPU for parallel workers?",
+      "key_phrases": ["high-throughput parallel workers", "model variant"],
+      "sources": [
+        {
+          "title": "ROCm backend guide",
+          "kind": "web",
+          "url": "sources/rocm.txt",
+          "snippet": "For high-throughput parallel workers a ROCm GPU is usually the best backend, while the NPU is better for low-latency single-stream tasks.",
+          "key_phrases": ["high-throughput parallel workers"]
+        },
+        {
+          "title": "Backend selection note",
+          "kind": "web",
+          "url": "sources/backend.txt",
+          "snippet": "Backend selection on Lemonade is by model variant: choose the model recipe that was pulled for rocm, vulkan or ryzenai.",
+          "key_phrases": ["model variant"]
+        }
+      ]
+    },
+    {
+      "id": "g4",
+      "query": "How does Lemonade keep inference local?",
+      "key_phrases": ["OpenAI-compatible", "local-first"],
+      "sources": [
+        {
+          "title": "Lemonade local server",
+          "kind": "web",
+          "url": "sources/lemonade.txt",
+          "snippet": "Lemonade is a local server that exposes OpenAI-compatible chat completion and embedding endpoints. Tools can remain local-first and private by default.",
+          "key_phrases": ["OpenAI-compatible", "local-first"]
+        }
+      ]
+    },
+    {
+      "id": "g5",
+      "query": "Why report source diversity separately from citation validity?",
+      "key_phrases": ["distinct source types", "reported separately"],
+      "sources": [
+        {
+          "title": "Source diversity rubric",
+          "kind": "rag",
+          "url": "sources/diversity.txt",
+          "snippet": "Source diversity measures how many distinct source types and documents an answer draws upon. Diversity is reported separately from citation precision.",
+          "key_phrases": ["distinct source types", "reported separately"]
+        },
+        {
+          "title": "Self-preference bias",
+          "kind": "model",
+          "url": "sources/bias.txt",
+          "snippet": "Self-preference bias makes a model favour its own output. Use a different, blinded judge and randomized source order; such scores are approximate.",
+          "key_phrases": ["blinded judge"]
+        }
+      ]
+    },
+    {
+      "id": "g6",
+      "query": "How should an evaluation judge avoid bias?",
+      "key_phrases": ["different model", "randomized order", "approximate"],
+      "sources": [
+        {
+          "title": "Self-preference bias",
+          "kind": "model",
+          "url": "sources/bias.txt",
+          "snippet": "To reduce self-preference bias, an evaluation judge should be a different model, blinded to which system produced an answer, and should see sources in randomized order. Such scores are approximate.",
+          "key_phrases": ["different model", "randomized order", "approximate"]
+        }
+      ]
+    },
+    {
+      "id": "g7",
+      "query": "How does ChromaDB support citation IDs?",
+      "key_phrases": ["vector index", "chunk index", "stable source id"],
+      "sources": [
+        {
+          "title": "ChromaDB storage",
+          "kind": "rag",
+          "url": "sources/chroma.txt",
+          "snippet": "ChromaDB stores embeddings in a vector index together with metadata such as the source document id and chunk index. That metadata becomes the stable source id used in citations.",
+          "key_phrases": ["vector index", "chunk index", "stable source id"]
+        }
+      ]
+    },
+    {
+      "id": "g8",
+      "query": "What should a reproduction manifest contain?",
+      "key_phrases": ["config snapshot", "stop reason", "one-command"],
+      "sources": [
+        {
+          "title": "Run manifest spec",
+          "kind": "web",
+          "url": "sources/manifest.txt",
+          "snippet": "A run manifest records the timestamp, generator and judge models, backends, a config snapshot and the stop reason for each query. It enables a one-command re-run.",
+          "key_phrases": ["config snapshot", "stop reason", "one-command"]
+        },
+        {
+          "title": "ROCm backend guide",
+          "kind": "web",
+          "url": "sources/rocm.txt",
+          "snippet": "For high-throughput parallel workers a ROCm GPU is usually the best backend, while the CPU remains the general fallback.",
+          "key_phrases": ["fallback"]
+        }
+      ]
+    }
+  ]
+}

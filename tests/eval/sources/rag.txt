@@ -1,0 +1,3 @@
+Retrieval-augmented generation grounds answers in retrieved passages from a
+private document index. Because the model is shown the retrieved passages before
+answering, RAG reduces hallucinations compared with an ungrounded model.

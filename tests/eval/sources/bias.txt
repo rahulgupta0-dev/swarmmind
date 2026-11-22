@@ -1,0 +1,4 @@
+Self-preference bias makes a model favour its own output. To reduce it, an
+evaluation judge should be a different model, blinded to which system produced
+an answer, and should see sources in randomized order. Such scores are
+approximate, not ground truth.

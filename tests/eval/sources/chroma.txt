@@ -1,0 +1,3 @@
+ChromaDB stores embeddings in a vector index together with metadata such as the
+source document id and chunk index. Similarity search returns the nearest
+chunks, and that metadata becomes the stable source id used in citations.

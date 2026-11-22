@@ -1,0 +1,3 @@
+A run manifest records the timestamp, generator and judge models, backends, a
+config snapshot and the stop reason for each query. It enables a one-command
+re-run and makes an evaluation report reproducible and auditable.

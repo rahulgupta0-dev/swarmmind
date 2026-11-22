@@ -1,0 +1,3 @@
+The Ryzen AI NPU accelerates local inference for small and medium language
+models. It runs at very low power compared with a discrete GPU, which makes it
+well suited to always-on assistants and battery-powered laptops.

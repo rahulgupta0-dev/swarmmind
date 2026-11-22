@@ -1,0 +1,4 @@
+Source diversity measures how many distinct source types and documents an
+answer draws upon. A report that cites only a single document has low diversity,
+even when every citation is valid, so diversity is reported separately from
+citation precision.

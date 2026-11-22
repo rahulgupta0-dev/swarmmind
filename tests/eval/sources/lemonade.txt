@@ -1,0 +1,3 @@
+Lemonade is a local server that exposes OpenAI-compatible chat completion and
+embedding endpoints. It keeps model weights and inference on the user's machine,
+so downstream tools can remain local-first and private by default.
