@@ -28,7 +28,7 @@
 | RC 48.3 FLM v1.0.13 `/v1/embeddings` | **Roadmap / RC-only** — embeddings plumbing exists; no supported model pinned; no local AMD validation. |
 | #4181 kokoro `voice` | **Not affected** — the 400 is the GUI options endpoint; SwarmMind's TTS sends `voice` inside `/v1/audio/speech` (`client.py:352-368`), which the issue says works. No code change. |
 | #4209 opt-in web search | **Already aligned** — search is opt-in and our page-fetch (`fetch_pages`) is a separate opt-in; we remain local-first. |
-| #4202 health / system info / backends | **Already aligned** — `swarmmind doctor` reports health/hardware; **action:** extending doctor to surface capabilities/backends (concurrent change). |
+| #4202 health / system info / backends | **Done** — `swarmmind doctor` reports health/hardware **and** model capabilities (`vision`/`image`/`tts`/`omni`) and available backends (commit `62ec95d`, 2026-11-22). |
 | #4178 `lemonade chat --json` | **Already aligned** — `swarmmind ask --json` writes only the report to stdout, diagnostics to stderr. |
 | #4230 / #4184 backends | **Roadmap** — ideas only; not implementable here without AMD hardware. |
 | #4227 `/metrics` duplicate label | **Not relevant** — we do not scrape `/metrics`. |
