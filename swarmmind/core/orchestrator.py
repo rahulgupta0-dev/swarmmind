@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any, Callable, Optional
 
 from swarmmind.config import Config
 from swarmmind.core.conductor import Conductor
+from swarmmind.core.evidence import EvidenceLedger, SourceRecord
 from swarmmind.core.hardware import (
     BackendRecommendation,
     SystemHardware,
@@ -17,13 +19,74 @@ from swarmmind.core.hardware import (
     recommend_backends,
 )
 from swarmmind.core.synthesis import Synthesis
-from swarmmind.core.workers import Worker, search_web
+from swarmmind.core.workers import Worker, fetch_pages, search_web
 from swarmmind.lemonade.client import LemonadeClient
 from swarmmind.rag.chroma_store import ChromaStore
 
 logger = logging.getLogger(__name__)
 
 _WORKER_TIMEOUT = 60.0
+
+_TOKEN_RE = re.compile(r"\w{4,}")
+
+
+def _source_ids(raw_sources: Any) -> list[str]:
+    """Collect source IDs from a worker's ``sources_cited`` value.
+
+    Tolerates ``SourceRecord`` models, canonical dicts and legacy URL strings
+    so old mocks keep working.
+    """
+    if not isinstance(raw_sources, list):
+        raw_sources = [raw_sources] if raw_sources else []
+    ids: list[str] = []
+    for raw in raw_sources:
+        if isinstance(raw, SourceRecord):
+            ids.append(raw.id)
+        elif isinstance(raw, dict) and raw.get("id"):
+            ids.append(str(raw["id"]))
+        elif isinstance(raw, str) and raw:
+            ids.append(raw)
+    return ids
+
+
+def _match_source_ids(text: str, records: list[SourceRecord]) -> list[str]:
+    """Match a claim to the sources whose title/snippet share its keywords.
+
+    Falls back to all used IDs when there is no lexical overlap, and caps the
+    match at three IDs to keep claims compact.
+    """
+    if not records:
+        return []
+    tokens = {t.lower() for t in _TOKEN_RE.findall(str(text))}
+    if not tokens:
+        return [r.id for r in records[:3]]
+
+    scored: list[tuple[int, str]] = []
+    for record in records:
+        haystack = {t.lower() for t in _TOKEN_RE.findall(
+            f"{record.title} {record.snippet}"
+        )}
+        scored.append((len(tokens & haystack), record.id))
+    best = max(score for score, _ in scored)
+    if best <= 0:
+        return [r.id for r in records[:3]]
+    return [rid for score, rid in scored if score == best][:3]
+
+
+def _build_claims(
+    key_points: Any,
+    records: list[SourceRecord],
+    supported_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Build compact Claim dicts from a worker's key points."""
+    if not isinstance(key_points, list):
+        key_points = [key_points] if key_points else []
+    claims: list[dict[str, Any]] = []
+    for point in key_points[:10]:
+        ids = _match_source_ids(str(point), records)
+        status = "supported" if any(sid in supported_ids for sid in ids) else "unverified"
+        claims.append({"text": str(point), "source_ids": ids, "status": status})
+    return claims
 
 
 class Orchestrator:
@@ -134,6 +197,9 @@ class Orchestrator:
         Returns:
         The final report dict from :class:`Synthesis.synthesize`.
         """
+        # One ledger per run: IDs are stable across workers and the report.
+        ledger = EvidenceLedger()
+
         # ------------------------------------------------------------------
         # 1. Pre-flight
         # ------------------------------------------------------------------
@@ -241,16 +307,42 @@ class Orchestrator:
             task = task_def.get("task", query)
             context = task_def.get("context", "")
             additional = ""
+            used_records: list[SourceRecord] = []
+            supported_ids: set[str] = set()
 
-            # Gather context for specific worker types
+            # Gather context for specific worker types, registering every
+            # retrieved item in the run's ledger so it gets a stable [S#] ID.
             if worker_type == "rag" and self._chroma_store and project_context:
                 pid = project_context.get("id", "default")
                 try:
                     results = self._chroma_store.search(pid, query, top_k=self._config.rag.top_k)
                     if results:
-                        additional = "\n\n".join(
-                            f"[Relevance {r['distance']:.3f}] {r['text']}" for r in results
-                        )
+                        lines: list[str] = []
+                        for r in results:
+                            meta = r.get("metadata") or {}
+                            doc_id = str(meta.get("source_id") or meta.get("source") or "")
+                            raw_chunk = meta.get("chunk_index", meta.get("chunk", -1))
+                            try:
+                                chunk = int(raw_chunk)
+                            except (TypeError, ValueError):
+                                chunk = -1
+                            snippet = str(r.get("text") or "")[:1200]
+                            record = ledger.register({
+                                "kind": "rag",
+                                "title": doc_id or "Document chunk",
+                                "snippet": snippet,
+                                "doc_id": doc_id,
+                                "chunk": chunk,
+                            })
+                            used_records.append(record)
+                            supported_ids.add(record.id)
+                            distance = r.get("distance", 0.0)
+                            try:
+                                relevance = f"{float(distance):.3f}"
+                            except (TypeError, ValueError):
+                                relevance = str(distance)
+                            lines.append(f"[{record.id}] [Relevance {relevance}] {snippet}")
+                        additional = "\n\n".join(lines)
                 except Exception as exc:
                     logger.warning("RAG search failed: %s", exc)
 
@@ -260,9 +352,46 @@ class Orchestrator:
                         None, search_web, task, 5,
                     )
                     if web_results:
-                        additional = "\n\n".join(
-                            f"[{r['title']}]({r['url']}): {r['snippet']}" for r in web_results
-                        )
+                        # Web settings default safely for older config mocks.
+                        web_cfg = getattr(self._config, "web", None)
+                        fetch_enabled = bool(getattr(web_cfg, "fetch_pages", False))
+                        max_pages = int(getattr(web_cfg, "max_pages", 5))
+                        timeout_seconds = float(getattr(web_cfg, "timeout_seconds", 5.0))
+
+                        if fetch_enabled:
+                            pages = await fetch_pages(
+                                web_results,
+                                max_pages=max_pages,
+                                timeout_seconds=timeout_seconds,
+                            )
+                        else:
+                            # Opt-out: keep the DDG snippet, marked unverified.
+                            pages = [
+                                {
+                                    "kind": "web",
+                                    "title": str(r.get("title") or ""),
+                                    "url": str(r.get("url") or ""),
+                                    "snippet": str(r.get("snippet") or ""),
+                                    "fetch_ok": False,
+                                }
+                                for r in web_results[:max_pages]
+                            ]
+
+                        lines = []
+                        for page in pages:
+                            record = ledger.register({
+                                "kind": "web",
+                                "title": page.get("title") or "Web result",
+                                "url": page.get("url") or "",
+                                "snippet": page.get("snippet") or "",
+                            })
+                            used_records.append(record)
+                            if page.get("fetch_ok"):
+                                supported_ids.add(record.id)
+                            lines.append(
+                                f"[{record.id}] {record.title}: {record.snippet}"
+                            )
+                        additional = "\n\n".join(lines)
                 except Exception as exc:
                     logger.warning("Web search failed: %s", exc)
 
@@ -274,17 +403,41 @@ class Orchestrator:
                     self._worker.run(worker_type, task, context, additional),
                     timeout=_WORKER_TIMEOUT,
                 )
-                result["worker_type"] = worker_type
-                return result
             except asyncio.TimeoutError:
-                return {
-                    "worker_type": worker_type,
+                result = {
                     "findings": f"Worker timed out after {_WORKER_TIMEOUT}s.",
                     "key_points": [],
                     "sources_cited": [],
                     "confidence": "low",
                     "gaps": ["Timeout"],
                 }
+            except Exception as exc:
+                logger.exception("Worker '%s' failed: %s", worker_type, exc)
+                result = {
+                    "findings": f"Worker {worker_type} encountered an error: {exc}",
+                    "key_points": [],
+                    "sources_cited": [],
+                    "confidence": "low",
+                    "gaps": [str(exc)],
+                }
+
+            # Workers with no external evidence still get an explicit,
+            # unverified model-knowledge source (stable URL keeps the ID
+            # unchanged when the ledger re-registers it during validation).
+            if not used_records:
+                used_records.append(ledger.register({
+                    "kind": "model",
+                    "title": f"Model knowledge ({worker_type})",
+                    "url": f"model://{worker_type}",
+                    "snippet": "",
+                }))
+
+            result["worker_type"] = worker_type
+            result["sources_cited"] = [r.model_dump() for r in used_records]
+            result["claims"] = _build_claims(
+                result.get("key_points"), used_records, supported_ids,
+            )
+            return result
 
         if exec_mode == "sequential":
             # Sequential: one worker at a time (safe for low-RAM systems)
@@ -311,10 +464,26 @@ class Orchestrator:
                 )
             )
 
+        # Canonical ID order across all workers, for the report registry.
+        used_ids: list[str] = []
+        for output in worker_outputs:
+            for sid in _source_ids(output.get("sources_cited")):
+                if sid not in used_ids:
+                    used_ids.append(sid)
+        source_dicts = [
+            record.model_dump()
+            for record in (ledger.get(sid) for sid in used_ids)
+            if record is not None
+        ]
+
         self._emit(
             progress_callback,
             "completed_workers",
-            {"worker_count": len(worker_outputs), "execution_mode": exec_mode},
+            {
+                "worker_count": len(worker_outputs),
+                "execution_mode": exec_mode,
+                "sources": source_dicts,
+            },
         )
 
         # ------------------------------------------------------------------
@@ -324,6 +493,13 @@ class Orchestrator:
         report = await self._synthesis.synthesize(
             worker_outputs, query, conversation_history=conversation_history,
         )
+
+        # Attach the run's evidence, validate citation IDs and mark the
+        # deliberately single-round pipeline.
+        report["sources"] = source_dicts
+        report = ledger.validate_citations(report)
+        report["stop_reason"] = "single_round"
+        report["rounds_used"] = 1
 
         self._emit(progress_callback, "done", {"message": "Research complete."})
 
