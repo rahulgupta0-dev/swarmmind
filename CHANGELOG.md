@@ -55,6 +55,16 @@ authoritative implementation spec.
 - HTTP 400 responses for a missing `model` field or non-LLM model now raise
   an actionable hint instead of a cryptic raw server error.
 
+### Polished
+
+- Unified UI design tokens, higher-contrast citation/grounding/source badges,
+  accessible status labels and a cleaner read-aloud action.
+- Timezone-aware UTC timestamps throughout the data layer with robust parsing
+  of legacy naive SQLite values (removes all `datetime.utcnow()` warnings).
+- Consolidated the duplicate README configuration sections, refreshed the CLI
+  reference/help text, and documented Lemonade auth and mock-server smoke
+  testing in `SETUP.md`.
+
 ### Deferred (roadmap, not implemented)
 
 - The **multi-round LLM critic / gap-analysis loop**, QueryDoc selective

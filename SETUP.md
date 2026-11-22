@@ -74,6 +74,28 @@ swarmmind web
 
 ---
 
+## 🔐 Lemonade authentication (v2026.47.1+)
+
+Lemonade v2026.47.1+ can require a Bearer token — an empty
+`LEMONADE_ADMIN_API_KEY` no longer bypasses authentication. Provide a key in one
+of these ways (an explicit config value takes precedence):
+
+```bash
+# 1) In ~/.swarmmind/config.toml (see Configuration below)
+#    [lemonade]
+#    api_key = "your-key"
+
+# 2) Via environment variables (keeps the secret out of config.toml)
+export LEMONADE_API_KEY="your-key"          # preferred
+export LEMONADE_ADMIN_API_KEY="your-key"    # fallback for local setups
+```
+
+SwarmMind sends `Authorization: Bearer <key>` only when a key is present, so
+older unauthenticated servers keep working unchanged. See
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for details.
+
+---
+
 ## 🧪 Running Tests
 
 ### Quick Test (No Server Required)
@@ -95,6 +117,13 @@ lemonade-server start
 # Run the 6-step smoke test
 bash tests/smoke_test.sh
 ```
+
+> **No AMD hardware available?** You can still run the smoke test against the
+> bundled mock Lemonade server. Start it in a separate terminal with
+> `.venv/bin/python tests/mock_lemonade_server.py` (it listens on port 13305;
+> override with `MOCK_PORT`), then run `bash tests/smoke_test.sh` as above. The
+> mock returns canned chat/embedding responses, so the full CLI and UI pipeline
+> is exercised without a real GPU or NPU.
 
 **Expected Output:**
 ```
@@ -212,6 +241,8 @@ python scripts/demo_edit.py
 [lemonade]
 host = "localhost"
 port = 13305
+api_key = ""             # Optional Bearer token for Lemonade v2026.47.1+;
+                         # or set LEMONADE_API_KEY / LEMONADE_ADMIN_API_KEY
 
 [models]
 conductor = "Qwen3.6-35B-A3B-GGUF"

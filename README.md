@@ -114,13 +114,82 @@ Open http://localhost:8501 in your browser.
 
 ## 🔧 Configuration
 
-SwarmMind auto-detects your AMD hardware via Lemonade's /v1/system-info endpoint:
+SwarmMind stores configuration at `~/.swarmmind/config.toml`:
+
+```toml
+[lemonade]
+host = "localhost"
+port = 13305
+api_key = ""              # Optional Bearer token for Lemonade v2026.47.1+
+
+[models]
+conductor = "Qwen3.6-35B-A3B-GGUF"
+worker = "Gemma-4-12B-it"
+embeddings = "nomic-embed-text-v1-GGUF"
+image = "Flux-2-Klein-4B"
+tts = "kokoro-v1"
+
+[rag]
+chunk_size = 512
+chunk_overlap = 64
+top_k = 5
+
+[execution]
+mode = "parallel"        # "parallel" (fast) or "sequential" (low-RAM)
+max_concurrent = 4        # Limit parallel workers (1-16)
+```
+
+### Lemonade API key (v2026.47.1+)
+
+Lemonade v2026.47.1+ can require authentication — an empty `LEMONADE_ADMIN_API_KEY`
+no longer bypasses it. Set the token as `lemonade.api_key` in `config.toml`, or
+export `LEMONADE_API_KEY` (falling back to `LEMONADE_ADMIN_API_KEY`). SwarmMind
+sends `Authorization: Bearer <key>` only when a key is present, so older,
+unauthenticated servers keep working unchanged. See
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+
+### Hardware auto-detection
+
+SwarmMind queries Lemonade's `/v1/system-info` endpoint and routes each model role
+to the best available backend:
 
 | Hardware | Backend | Use Case |
 |---|---|---|
-| AMD Ryzen AI NPU (XDNA 2) | ryzenai | Conductor (low-latency) |
-| AMD Radeon GPU (ROCm) | rocm | Workers (high-throughput) |
-| AMD CPU (llama.cpp) | cpu | Fallback |
+| AMD Ryzen AI NPU (XDNA 2) | `ryzenai` | Conductor (low-latency) and embeddings (low-power, steady-state) |
+| AMD Radeon GPU (ROCm) | `rocm` | Conductor & workers (high-throughput) |
+| AMD CPU (llama.cpp) | `cpu` | Fallback / TTS |
+
+Pin backends manually in `config.toml`:
+
+```toml
+[models.backends]
+conductor = "rocm"
+worker = "rocm"
+embeddings = "ryzenai"
+image = "rocm"
+tts = "cpu"
+```
+
+### Execution mode
+
+Two worker execution modes accommodate different hardware:
+
+| Mode | Speed | RAM Usage | Best For |
+|---|---|---|---|
+| `parallel` (default) | ⚡ Fast — workers run simultaneously | Higher — multiple LLM calls at once | 32 GB+ RAM (Strix Halo, high-end GPUs) |
+| `sequential` | 🐢 Slower — one worker at a time | Lower — single LLM call at a time | 8-16 GB RAM (laptops, older hardware) |
+
+```bash
+# CLI: Force sequential mode
+swarmmind ask "Compare RAG vs fine-tuning" --sequential
+
+# Config: Set via config.toml
+[execution]
+mode = "sequential"
+max_concurrent = 1
+```
+
+In the **Web UI**, toggle execution mode in the **Settings** panel (left sidebar).
 
 ---
 
@@ -150,7 +219,13 @@ swarmmind/
 
 ---
 
-## 📝 AMD Lemonade Integration (Lemonade v11.5.0 Ready)
+## 📝 AMD Lemonade Integration (v2026.47+ Compatible)
+
+SwarmMind targets current Lemonade Server releases (v2026.45.3 → v2026.48.x)
+through the OpenAI-compatible `/v1/*` API, including Bearer-token authentication
+and the friendlier 400/405 error handling. The legacy v11.5.0 endpoints below
+(health, load, classify, inference, embeddings) remain supported. See
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the release-by-release matrix.
 
 SwarmMind integrates with the following Lemonade endpoints:
 
@@ -174,85 +249,20 @@ SwarmMind integrates with the following Lemonade endpoints:
 | `swarmmind ask <query> --no-web` | Disable web search for this query |
 | `swarmmind ask <query> --sequential` | Run workers sequentially (safer on low-RAM systems) |
 | `swarmmind ask <query> --project-id <id>` | Scope query to a specific project's sources |
-| `swarmmind project create <name>` | Create a new research project |
+| `swarmmind ask <query> --json` | Emit the report as pure JSON on stdout (diagnostics go to stderr) |
+| `swarmmind project create <name>` | Create a new research project (auto-generated UUID ID) |
+| `swarmmind project create <name> --id <id>` / `-i <id>` | Create a project with a custom, URL-friendly ID |
 | `swarmmind project list` | List all projects |
 | `swarmmind source add <project> <type> <uri>` | Add a source (pdf, youtube, web, text) |
 | `swarmmind source list <project>` | List sources in a project |
 | `swarmmind report list <project>` | List past reports for a project |
-| `swarmmind config show` | Show current configuration |
+| `swarmmind config show` | Show current configuration (including `lemonade.api_key`) |
 | `swarmmind benchmark` | Run AMD cross-backend benchmark |
-| `swarmmind eval --report` | Run the offline golden-set quality evaluation (deterministic metrics) |
+| `swarmmind eval` | Run the offline golden-set quality evaluation (deterministic metrics) |
+| `swarmmind eval --report` | Print the Markdown evaluation report |
 | `swarmmind eval --report --judge` | Add the approximate secondary judge (a different, blinded model) |
 | `swarmmind eval --output report.md` | Write the Markdown evaluation report to a file |
 | `swarmmind web` | Launch Streamlit web UI |
-
----
-
-## ⚙️ Configuration
-
-SwarmMind stores configuration at `~/.swarmmind/config.toml`:
-
-```toml
-[lemonade]
-host = "localhost"
-port = 13305
-
-[models]
-conductor = "Qwen3.6-35B-A3B-GGUF"
-worker = "Gemma-4-12B-it"
-embeddings = "nomic-embed-text-v1-GGUF"
-image = "Flux-2-Klein-4B"
-tts = "kokoro-v1"
-
-[rag]
-chunk_size = 512
-chunk_overlap = 64
-top_k = 5
-
-[execution]
-mode = "parallel"        # "parallel" (fast) or "sequential" (low-RAM)
-max_concurrent = 4        # Limit parallel workers (1-16)
-```
-
-### Execution Mode
-
-SwarmMind supports two worker execution modes to accommodate different hardware:
-
-| Mode | Speed | RAM Usage | Best For |
-|---|---|---|---|
-| `parallel` (default) | ⚡ Fast — workers run simultaneously | Higher — multiple LLM calls at once | 32 GB+ RAM (Strix Halo, high-end GPUs) |
-| `sequential` | 🐢 Slower — one worker at a time | Lower — single LLM call at a time | 8-16 GB RAM (laptops, older hardware) |
-
-```bash
-# CLI: Force sequential mode
-swarmmind ask "Compare RAG vs fine-tuning" --sequential
-
-# Config: Set via config.toml
-[execution]
-mode = "sequential"
-max_concurrent = 1
-```
-
-In the **Web UI**, toggle execution mode in the **Settings** panel (left sidebar).
-
-Hardware auto-detection routes each model role to the best available backend:
-
-| Hardware | Backend | Use Case |
-|---|---|---|
-| AMD Ryzen AI NPU (XDNA 2) | ryzenai | Embeddings (low-power, steady-state) |
-| AMD Radeon GPU (ROCm) | rocm | Conductor & Workers (high-throughput) |
-| AMD CPU (llama.cpp) | cpu | Fallback / TTS |
-
-Pin backends manually in `config.toml`:
-
-```toml
-[models.backends]
-conductor = "rocm"
-worker = "rocm"
-embeddings = "ryzenai"
-image = "rocm"
-tts = "cpu"
-```
 
 ---
 
@@ -299,6 +309,8 @@ Apache 2.0 — see [LICENSE](LICENSE) for full terms.
 | [Setup Guide](SETUP.md) | Judge setup instructions, troubleshooting |
 | [CHANGELOG.md](CHANGELOG.md) | TDD audit fixes and methodology |
 | [CHALLENGE-STATUS.md](docs/CHALLENGE-STATUS.md) | Verified challenge status, judging patterns and action plan |
+| [ECOSYSTEM-RESEARCH.md](docs/ECOSYSTEM-RESEARCH.md) | AMD ecosystem and community research behind the submission |
+| [COMPATIBILITY.md](docs/COMPATIBILITY.md) | Lemonade release compatibility matrix (v2026.45.3 → v2026.48.x) |
 | [EVALUATION.md](docs/EVALUATION.md) | Evaluation method, metrics, golden set and caveats |
 | [REPRODUCIBILITY.md](docs/REPRODUCIBILITY.md) | Run manifest, one-command re-run and privacy note |
 | [README.md](README.md) | Architecture, features, CLI reference |

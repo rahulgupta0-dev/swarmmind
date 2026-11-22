@@ -7,6 +7,7 @@ touched and no test shares state with another.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from click.testing import CliRunner
@@ -102,3 +103,58 @@ def test_source_add_text_to_existing_project(cli, tmp_path) -> None:
     store = ChromaStore(str(tmp_path / "chroma"))
     hits = store.search("ground-proj", "capital of France", 3)
     assert any(fact in hit["text"] for hit in hits)
+
+
+def test_help_exposes_new_options(cli) -> None:
+    """Help text documents the v0.4 CLI options and commands."""
+    result = cli.invoke(cli_main.main, ["--help"])
+    assert result.exit_code == 0, result.output
+    for command in ("ask", "project", "eval", "config", "benchmark", "web"):
+        assert command in result.output
+
+    result = cli.invoke(cli_main.main, ["ask", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--json" in result.output
+    assert "--project-id" in result.output
+
+    result = cli.invoke(cli_main.main, ["project", "create", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--id" in result.output and "-i" in result.output
+
+    result = cli.invoke(cli_main.main, ["eval", "--help"])
+    assert result.exit_code == 0, result.output
+    for option in ("--report", "--output", "--judge"):
+        assert option in result.output
+
+    result = cli.invoke(cli_main.main, ["config", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "show" in result.output and "set" in result.output
+
+
+def test_ask_json_stdout_is_pure_json(cli, tmp_path, monkeypatch) -> None:
+    """`ask --json` puts only the report on stdout; warnings go to stderr."""
+    db = Database(str(tmp_path / "swarmmind.db"))
+
+    async def _init() -> None:
+        await db.init_db()
+        await db.close()
+
+    asyncio.run(_init())
+
+    class FakeOrchestrator:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def run(self, **kwargs) -> dict:
+            return {"title": "Fake Report", "sections": []}
+
+    monkeypatch.setattr(cli_main, "Orchestrator", FakeOrchestrator)
+
+    result = cli.invoke(cli_main.main, [
+        "ask", "hello", "--json", "--no-web", "--project-id", "missing-proj",
+    ])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {"title": "Fake Report", "sections": []}
+    assert "missing-proj" in result.stderr
+    assert "missing-proj" not in result.stdout
+

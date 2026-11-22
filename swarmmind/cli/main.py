@@ -55,11 +55,28 @@ def _get_client(config: Config) -> LemonadeClient:
     )
 
 
+def _diagnostics(stderr: bool = False) -> Console:
+    """Return a console for diagnostics.
+
+    Machine-readable modes (``ask --json``) pass ``stderr=True`` so stdout
+    stays pure JSON; every warning and error then lands on stderr instead.
+    """
+    return Console(stderr=stderr)
+
+
 # -----------------------------------------------------------------------
 # Main group
 # -----------------------------------------------------------------------
 
-@click.group()
+@click.group(
+    epilog=(
+        "\b\n"
+        "Quick start:\n"
+        '  swarmmind ask "What is AMD Ryzen AI?"\n'
+        "  swarmmind web\n"
+        "  swarmmind eval --report"
+    ),
+)
 @click.version_option(version=__version__, prog_name="swarmmind")
 def main() -> None:
     """Lemonade SwarmMind — multi-agent research orchestration."""
@@ -69,14 +86,28 @@ def main() -> None:
 # ask — quick research query
 # -----------------------------------------------------------------------
 
-@main.command()
+@main.command(
+    epilog=(
+        "\b\n"
+        "Examples:\n"
+        '  swarmmind ask "What is AMD Ryzen AI?"\n'
+        '  swarmmind ask "Compare RAG vs fine-tuning" --no-web --sequential\n'
+        '  swarmmind ask "Summarise my sources" --project-id my-proj --json'
+    ),
+)
 @click.argument("query")
-@click.option("--project-id", "-p", default=None, help="Project ID for context.")
-@click.option("--no-web", is_flag=True, help="Disable web search.")
+@click.option("--project-id", "-p", default=None, help="Scope the query to a project's sources by ID.")
+@click.option("--no-web", is_flag=True, help="Disable web search for this query.")
 @click.option("--sequential", is_flag=True, help="Run workers sequentially (safer on low-RAM systems).")
-@click.option("--json", "as_json", is_flag=True, help="Print the raw report as JSON instead of rendering it.")
+@click.option("--json", "as_json", is_flag=True, help="Print the report as pure JSON on stdout (diagnostics go to stderr).")
 def ask(query: str, project_id: Optional[str], no_web: bool, sequential: bool, as_json: bool) -> None:
-    """Run a research query and display the report."""
+    """Run a research query and display the report.
+
+    With --json, only the report is written to stdout; warnings and errors go to
+    stderr so the output can be piped into other tools.
+    """
+    diag = _diagnostics(stderr=as_json)
+
     async def _run() -> None:
         from swarmmind.config import ExecutionConfig
 
@@ -101,6 +132,11 @@ def ask(query: str, project_id: Optional[str], no_web: bool, sequential: bool, a
                 # model_dump_json() serialises datetimes to strings; the
                 # conductor embeds this dict in a JSON prompt.
                 project_context = json.loads(project.model_dump_json())
+            else:
+                diag.print(
+                    f"[yellow]Warning: project '{project_id}' does not exist; "
+                    "continuing without project context.[/yellow]"
+                )
             await db.close()
 
         orchestrator = Orchestrator(config, client, chroma_store=chroma)
@@ -127,13 +163,13 @@ def ask(query: str, project_id: Optional[str], no_web: bool, sequential: bool, a
                         progress_callback=progress,
                     )
         except (ConnectionError, OSError) as exc:
-            console.print(f"[red]Error: Cannot reach Lemonade server.[/red]")
-            console.print(f"[dim]{exc}[/dim]")
-            console.print("\n[yellow]Make sure the Lemonade server is running:[/yellow]")
-            console.print("[dim]  lemonade-server start[/dim]")
+            diag.print("[red]Error: Cannot reach Lemonade server.[/red]")
+            diag.print(f"[dim]{exc}[/dim]")
+            diag.print("\n[yellow]Make sure the Lemonade server is running:[/yellow]")
+            diag.print("[dim]  lemonade-server start[/dim]")
             raise SystemExit(1)
         except Exception as exc:
-            console.print(f"[red]Unexpected error: {exc}[/red]")
+            diag.print(f"[red]Unexpected error: {exc}[/red]")
             raise SystemExit(1)
 
         if as_json:
@@ -183,16 +219,24 @@ def project() -> None:
     """Manage research projects."""
 
 
-@project.command()
+@project.command(
+    epilog=(
+        "\b\n"
+        "Examples:\n"
+        '  swarmmind project create "AMD Research"\n'
+        '  swarmmind project create "AMD Research" --id amd-research '
+        '-d "Local notes"'
+    ),
+)
 @click.argument("name")
-@click.option("--description", "-d", default="", help="Project description.")
-@click.option("--no-web", is_flag=True, help="Disable web search.")
+@click.option("--description", "-d", default="", help="A short project description.")
+@click.option("--no-web", is_flag=True, help="Disable web search for this project.")
 @click.option(
     "--id", "-i", "project_id", default=None,
     help="Custom project ID (letters, digits, '.', '_' and '-'; default: auto-generated UUID).",
 )
 def create(name: str, description: str, no_web: bool, project_id: Optional[str]) -> None:
-    """Create a new project."""
+    """Create a new project with an auto-generated ID, or supply --id."""
     if project_id is not None and not _PROJECT_ID_RE.fullmatch(project_id):
         raise click.BadParameter(
             "use only letters, digits, '.', '_' and '-' (max 128 chars, "
@@ -205,7 +249,10 @@ def create(name: str, description: str, no_web: bool, project_id: Optional[str])
         try:
             await db.init_db()
             if project_id and await db.get_project(project_id) is not None:
-                console.print(f"[red]Error: a project with id '{project_id}' already exists.[/red]")
+                console.print(
+                    f"[red]Error: A project with ID '{project_id}' already exists. "
+                    "Choose a different --id.[/red]"
+                )
                 raise SystemExit(1)
             proj = Project(
                 id=project_id or "",
@@ -253,7 +300,10 @@ def show(project_id: str) -> None:
         await db.close()
 
         if not proj:
-            console.print("[red]Project not found.[/red]")
+            console.print(
+                f"[red]Error: Project '{project_id}' does not exist. "
+                "Use 'swarmmind project list' to see available IDs.[/red]"
+            )
             return
 
         console.print(f"[bold]Name:[/bold] {proj.name}")
@@ -291,7 +341,7 @@ def add(project_id: str, source_type: str, source_uri: str, name: str) -> None:
             await db.init_db()
             if await db.get_project(project_id) is None:
                 console.print(
-                    f"[red]Error: project '{project_id}' does not exist. "
+                    f"[red]Error: Project '{project_id}' does not exist. "
                     "Create it first with `swarmmind project create NAME "
                     f"--id {project_id}`.[/red]"
                 )
@@ -328,7 +378,7 @@ def add(project_id: str, source_type: str, source_uri: str, name: str) -> None:
                 )
             finally:
                 await db.close()
-            console.print(f"[red]Error: could not ingest source: {error}[/red]")
+            console.print(f"[red]Error: Could not ingest source: {error}[/red]")
             raise SystemExit(1)
 
         chunks = int(result.get("chunk_count", 0))
@@ -596,12 +646,12 @@ def export(conversation_id: str, output_path: str) -> None:
 
 @main.group()
 def config() -> None:
-    """View or modify configuration."""
+    """View or modify configuration, including the Lemonade API key."""
 
 
 @config.command()
 def show_config() -> None:
-    """Display the current configuration."""
+    """Display the current configuration (including lemonade.api_key)."""
     cfg = _get_config()
     console.print(Panel.fit(json.dumps(cfg.model_dump(), indent=2, default=str), title="Configuration"))
     console.print(f"\nLemonade base URL: [bold]{cfg.get_lemonade_base_url()}[/bold]")
@@ -611,8 +661,12 @@ def show_config() -> None:
 @click.argument("key")
 @click.argument("value")
 def set_config(key: str, value: str) -> None:
-    """Set a config value (dot-notation, e.g. lemonade.port=13305)."""
-    console.print("[yellow]Config set via CLI coming in Phase 2. Edit ~/.swarmmind/config.toml directly.[/yellow]")
+    """Set a config value using dot notation (e.g. lemonade.port=13305)."""
+    console.print(
+        "[yellow]Config edits via the CLI are not available yet. Edit "
+        "~/.swarmmind/config.toml directly (for example, lemonade.api_key) "
+        "or export LEMONADE_API_KEY.[/yellow]"
+    )
 
 
 # -----------------------------------------------------------------------
@@ -641,7 +695,7 @@ def web() -> None:
 @click.option("--concurrency", default=4, type=int, help="Concurrent streams in the parallel swarm test.")
 @click.option("--out", type=click.Path(path_type=Path), default=None, help="Output file path for Markdown report.")
 def benchmark(prompt: str, iterations: int, concurrency: int, out: Path | None) -> None:
-    """Run an AMD-cross-backend benchmark against the configured Lemonade server."""
+    """Run an AMD cross-backend benchmark against the configured Lemonade server."""
     asyncio.run(_benchmark_async(prompt, iterations, concurrency, out))
 
 
@@ -650,7 +704,16 @@ def benchmark(prompt: str, iterations: int, concurrency: int, out: Path | None) 
 # -----------------------------------------------------------------------
 
 
-@main.command(name="eval")
+@main.command(
+    name="eval",
+    epilog=(
+        "\b\n"
+        "Examples:\n"
+        "  swarmmind eval\n"
+        "  swarmmind eval --report --judge\n"
+        "  swarmmind eval --output eval-report.md"
+    ),
+)
 @click.option(
     "--report", "show_report", is_flag=True,
     help="Print the Markdown evaluation report to stdout.",
@@ -661,7 +724,7 @@ def benchmark(prompt: str, iterations: int, concurrency: int, out: Path | None) 
 )
 @click.option(
     "--judge", is_flag=True,
-    help="Enable the secondary LLM-as-judge (uses a different, blinded model).",
+    help="Enable the secondary LLM judge (a different, blinded model).",
 )
 def eval_cmd(show_report: bool, output: Path | None, judge: bool) -> None:
     """Evaluate answer quality against the local golden set.
