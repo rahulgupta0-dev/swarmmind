@@ -2,8 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
+import logging
+import os
+import platform
 import re
+import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -745,3 +752,343 @@ def eval_cmd(show_report: bool, output: Path | None, judge: bool) -> None:
     if show_report or output is None:
         # Plain echo preserves the Markdown table (Rich would wrap cells).
         click.echo(markdown)
+
+
+# -----------------------------------------------------------------------
+# doctor — newcomer-friendly installation / setup diagnostics
+# -----------------------------------------------------------------------
+
+_DOCTOR_IMPORTS = (
+    "pydantic", "httpx", "chromadb", "streamlit", "duckduckgo_search",
+    "aiosqlite", "click", "rich",
+)
+_DOCTOR_LABELS = {
+    "python": "Python version",
+    "imports": "Critical imports",
+    "config": "Configuration",
+    "data_dir": "Data directory",
+    "lemonade_health": "Lemonade server",
+    "models": "Models / Omni",
+    "system_info": "Hardware / backend",
+}
+_DOCTOR_NEXT_STEPS = (
+    "swarmmind doctor",
+    'swarmmind ask "What is AMD Ryzen AI?"',
+    "swarmmind web",
+    "bash tests/smoke_test.sh",
+)
+_DOCTOR_TIMEOUT = 2.0
+_DOCTOR_HINT = (
+    "Start Lemonade with `lemonade-server start`. If you have no AMD hardware, "
+    "run the mock server instead: `python tests/mock_lemonade_server.py`."
+)
+
+
+def _doctor_check(name: str, status: str, detail: str, **extra: Any) -> dict[str, Any]:
+    """Build one doctor result row."""
+    row: dict[str, Any] = {
+        "name": name,
+        "label": _DOCTOR_LABELS.get(name, name),
+        "status": status,
+        "detail": detail,
+    }
+    row.update(extra)
+    return row
+
+
+def _mask_api_key(key: str) -> str:
+    """Return a redacted representation of *key* — never the key itself."""
+    if not key:
+        return "(not set)"
+    if len(key) <= 4:
+        return "****"
+    return f"****{key[-2:]}"
+
+
+def _is_omni_model(name: str) -> bool:
+    """Mirror ``LemonadeClient.is_omni_model`` without needing a client instance."""
+    lowered = name.lower()
+    return "omni" in lowered or lowered.startswith("lmx-omni-")
+
+
+def _doctor_client(config: Config) -> LemonadeClient:
+    """Build a short-timeout client for doctor probes (offline-safe)."""
+    return LemonadeClient(
+        config.get_lemonade_base_url(),
+        api_key=config.lemonade.api_key or None,
+        timeout=_DOCTOR_TIMEOUT,
+    )
+
+
+@contextmanager
+def _quiet_client_logs():
+    """Hide the client's raw request-error logs; doctor reports them itself."""
+    logger = logging.getLogger("swarmmind.lemonade.client")
+    previous = logger.level
+    logger.setLevel(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        logger.setLevel(previous)
+
+
+def _check_python() -> dict[str, Any]:
+    version = platform.python_version()
+    ok = sys.version_info >= (3, 11)
+    return _doctor_check(
+        "python", "PASS" if ok else "FAIL",
+        f"Python {version} (3.11+ required)",
+        version=version,
+    )
+
+
+def _import_for_doctor(module_name: str) -> Any:
+    """Import a dependency (seam kept small so doctor tests can fake failures)."""
+    return importlib.import_module(module_name)
+
+
+def _check_imports() -> dict[str, Any]:
+    missing: list[str] = []
+    for module_name in _DOCTOR_IMPORTS:
+        try:
+            _import_for_doctor(module_name)
+        except Exception as exc:  # noqa: BLE001 - report any import failure
+            missing.append(f"{module_name} ({type(exc).__name__})")
+    if missing:
+        return _doctor_check(
+            "imports", "FAIL", "Missing packages: " + ", ".join(missing),
+            hint='pip install -e ".[dev]"', missing=missing,
+        )
+    return _doctor_check("imports", "PASS", f"{len(_DOCTOR_IMPORTS)} critical packages available")
+
+
+def _check_config() -> tuple[dict[str, Any], Config | None]:
+    config_path = Path.home() / ".swarmmind" / "config.toml"
+    try:
+        cfg = _get_config()
+    except Exception as exc:  # noqa: BLE001 - config errors must not escape
+        return _doctor_check(
+            "config", "FAIL", f"Could not load config: {exc}",
+            hint="Create ~/.swarmmind/config.toml or fix the TOML syntax.",
+            path=str(config_path),
+        ), None
+
+    lemonade = cfg.lemonade
+    web = cfg.web
+    models = cfg.models
+    api_key = getattr(lemonade, "api_key", "") or ""
+    masked = _mask_api_key(api_key)
+    omni = getattr(models, "omni", "") or ""
+    exists = config_path.is_file()
+    detail = (
+        f"{'Loaded ' + str(config_path) if exists else 'Defaults (no config.toml found)'} — "
+        f"Lemonade {lemonade.host}:{lemonade.port}, api_key {masked}, "
+        f"web.fetch_pages={web.fetch_pages}, models.omni={omni or '(not set)'}"
+    )
+    return _doctor_check(
+        "config", "PASS", detail,
+        path=str(config_path), file_exists=exists,
+        host=lemonade.host, port=lemonade.port,
+        api_key_present=bool(api_key), api_key_masked=masked,
+        web_fetch_pages=bool(web.fetch_pages), models_omni=omni,
+    ), cfg
+
+
+def _check_data_dir() -> dict[str, Any]:
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        fd, probe_name = tempfile.mkstemp(prefix=".doctor-", dir=str(DATA_DIR))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as probe:
+                probe.write("ok")
+        finally:
+            Path(probe_name).unlink(missing_ok=True)
+        return _doctor_check("data_dir", "PASS", f"Writable: {DATA_DIR}", path=str(DATA_DIR))
+    except Exception as exc:  # noqa: BLE001 - permission errors must not escape
+        return _doctor_check(
+            "data_dir", "FAIL", f"Cannot write to {DATA_DIR}: {exc}",
+            hint=f"Create {DATA_DIR} and make sure the current user can write to it.",
+            path=str(DATA_DIR),
+        )
+
+
+def _parse_system_info(info: Any) -> dict[str, Any]:
+    """Extract a friendly backend/hardware summary from /v1/system-info."""
+    if not isinstance(info, dict) or not info:
+        return {"available": False, "backend": "unknown", "hardware": "unknown", "mock": False}
+    mock = "mock" in json.dumps(info, default=str).lower()
+    names: list[str] = []
+    backends: list[str] = []
+    devices = info.get("devices")
+    if isinstance(devices, list):
+        for device in devices:
+            if not isinstance(device, dict):
+                continue
+            names.append(str(device.get("name") or device.get("type") or "unknown"))
+            if device.get("backend"):
+                backends.append(str(device["backend"]))
+    hardware = ", ".join(names) if names else str(info.get("cpu") or info.get("os") or "unknown")
+    backend = str(info.get("backend") or (backends[0] if backends else "unknown"))
+    return {"available": True, "backend": backend, "hardware": hardware, "mock": mock}
+
+
+def _check_models(models: Any) -> dict[str, Any]:
+    if isinstance(models, dict):
+        models = models.get("data", [])
+    if not isinstance(models, list):
+        return _doctor_check("models", "WARN", "Could not parse the /v1/models response")
+    names = [
+        str(m.get("id") or m.get("name") or "")
+        for m in models if isinstance(m, dict)
+    ]
+    omni = [name for name in names if _is_omni_model(name)]
+    if omni:
+        return _doctor_check(
+            "models", "PASS",
+            f"{len(models)} model(s) visible; Omni: {', '.join(omni[:3])}",
+            count=len(models), omni_visible=True, omni_models=omni,
+        )
+    return _doctor_check(
+        "models", "WARN",
+        f"{len(models)} model(s) visible, but no Omni model was found",
+        hint="Set models.omni in ~/.swarmmind/config.toml to an Omni collection name.",
+        count=len(models), omni_visible=False, omni_models=[],
+    )
+
+
+def _check_system_info(info: Any) -> dict[str, Any]:
+    summary = _parse_system_info(info)
+    if not summary["available"]:
+        return _doctor_check(
+            "system_info", "WARN",
+            "Hardware/backend unknown — /v1/system-info is unavailable (mock or unsupported server)",
+            **summary,
+        )
+    if summary["mock"] or summary["backend"] == "unknown":
+        return _doctor_check(
+            "system_info", "WARN",
+            f"Mock/unknown hardware — backend {summary['backend']}, devices {summary['hardware']} "
+            "(system-info is not representative of real hardware)",
+            **summary,
+        )
+    return _doctor_check(
+        "system_info", "PASS",
+        f"Backend {summary['backend']}, devices {summary['hardware']}",
+        **summary,
+    )
+
+
+@main.command(
+    epilog=(
+        "\b\n"
+        "Examples:\n"
+        "  swarmmind doctor\n"
+        "  swarmmind doctor --json"
+    ),
+)
+@click.option(
+    "--json", "as_json", is_flag=True,
+    help="Print pure JSON on stdout (diagnostics go to stderr).",
+)
+def doctor(as_json: bool) -> None:
+    """Check your installation and give actionable next steps.
+
+    Verifies Python, dependencies, config, data directory and the Lemonade
+    server (health, models, hardware) without making long network waits.
+    """
+    diag = _diagnostics(stderr=True)
+
+    checks: list[dict[str, Any]] = [
+        _check_python(),
+        _check_imports(),
+    ]
+    config_check, config = _check_config()
+    checks.append(config_check)
+    checks.append(_check_data_dir())
+
+    if config is None:
+        checks.append(_doctor_check(
+            "lemonade_health", "FAIL", "Skipped — configuration could not be loaded",
+            hint=_DOCTOR_HINT,
+        ))
+        checks.append(_doctor_check("models", "WARN", "Skipped — Lemonade server unavailable"))
+        checks.append(_doctor_check("system_info", "WARN", "Skipped — Lemonade server unavailable"))
+    else:
+        client = _doctor_client(config)
+        try:
+            with _quiet_client_logs():
+                health = asyncio.run(client.health_check())
+        except Exception as exc:  # noqa: BLE001 - never leak a traceback
+            health = {"status": "error", "detail": str(exc)}
+        reachable = isinstance(health, dict) and health.get("status") == "ok"
+        if reachable:
+            checks.append(_doctor_check(
+                "lemonade_health", "PASS",
+                f"Lemonade reachable at {config.get_lemonade_base_url()}",
+            ))
+        else:
+            detail = (health.get("detail") or "unreachable") if isinstance(health, dict) else str(health)
+            hint = _DOCTOR_HINT
+            if isinstance(health, dict) and health.get("status") == "forbidden":
+                hint = (
+                    "Lemonade rejected authentication. Set LEMONADE_API_KEY "
+                    "(or lemonade.api_key in ~/.swarmmind/config.toml). " + hint
+                )
+            checks.append(_doctor_check(
+                "lemonade_health", "FAIL",
+                f"Cannot reach Lemonade at {config.get_lemonade_base_url()}: {detail}",
+                hint=hint,
+            ))
+
+        if not reachable:
+            checks.append(_doctor_check("models", "WARN", "Skipped — Lemonade server unavailable"))
+            checks.append(_doctor_check("system_info", "WARN", "Skipped — Lemonade server unavailable"))
+        else:
+            try:
+                with _quiet_client_logs():
+                    models = asyncio.run(client.get_models())
+                checks.append(_check_models(models))
+            except Exception as exc:  # noqa: BLE001
+                checks.append(_doctor_check("models", "WARN", f"Could not list models: {exc}"))
+            try:
+                with _quiet_client_logs():
+                    info = asyncio.run(client.system_info())
+            except Exception:  # noqa: BLE001
+                info = {}
+            checks.append(_check_system_info(info))
+
+    counts = {
+        status: sum(1 for check in checks if check["status"] == status)
+        for status in ("PASS", "WARN", "FAIL")
+    }
+    summary = f"{counts['PASS']} passed, {counts['WARN']} warning(s), {counts['FAIL']} failed"
+    payload = {
+        "status": "fail" if counts["FAIL"] else "ok",
+        "checks": checks,
+        "summary": counts,
+        "next_steps": list(_DOCTOR_NEXT_STEPS),
+    }
+
+    if as_json:
+        # Only the JSON document goes to stdout; every diagnostic goes to stderr.
+        for check in checks:
+            if check["status"] != "PASS":
+                diag.print(f"{check['status']} {check['name']}: {check['detail']}")
+                if check.get("hint"):
+                    diag.print(f"  Hint: {check['hint']}")
+        click.echo(json.dumps(payload, indent=2))
+    else:
+        click.echo("SwarmMind doctor")
+        click.echo("================")
+        for check in checks:
+            click.echo(f"[{check['status']}] {check['label']}: {check['detail']}")
+            if check.get("hint"):
+                click.echo(f"       -> {check['hint']}")
+        click.echo()
+        click.echo(f"Summary: {summary}")
+        click.echo("Next steps:")
+        for step in _DOCTOR_NEXT_STEPS:
+            click.echo(f"  {step}")
+
+    if counts["FAIL"]:
+        raise SystemExit(1)
