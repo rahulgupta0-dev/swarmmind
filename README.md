@@ -54,8 +54,10 @@ graph TD
 - **🖥️ AMD Hardware Detection** — Auto-detects Ryzen AI NPU, ROCm GPU, and recommends optimal backends
 - **🎨 Lemonade Omni Models** — Native multimodal processing! Leverages Qwen3.6-35B-A3B for Vision, Flux for Diagrams, and Kokoro for TTS narration.
 - **📊 Structured Reports** — Executive summary, sections, contradictions, follow-up questions
-- **📤 Export** — Markdown and HTML report export
-- **🖥️ Professional UI** — Dark glassmorphism design with 3-panel layout
+- **🔗 Grounded Citations** — Stable `[S#]` source IDs, clickable citation markers, a grounding badge and a Sources appendix with the exact supporting snippet
+- **🧪 Quality & Evaluation** — Deterministic, offline golden-set metrics with an optional independent (blinded) LLM judge — see [docs/EVALUATION.md](docs/EVALUATION.md)
+- **📤 Export** — Markdown and HTML report export with inline citations and a run manifest
+- **🖥️ Professional UI** — Dark glassmorphism design with 3-panel layout, live source-status refresh and source-first loading
 
 ---
 
@@ -176,6 +178,9 @@ SwarmMind integrates with the following Lemonade endpoints:
 | `swarmmind report list <project>` | List past reports for a project |
 | `swarmmind config show` | Show current configuration |
 | `swarmmind benchmark` | Run AMD cross-backend benchmark |
+| `swarmmind eval --report` | Run the offline golden-set quality evaluation (deterministic metrics) |
+| `swarmmind eval --report --judge` | Add the approximate secondary judge (a different, blinded model) |
+| `swarmmind eval --output report.md` | Write the Markdown evaluation report to a file |
 | `swarmmind web` | Launch Streamlit web UI |
 
 ---
@@ -248,6 +253,36 @@ tts = "cpu"
 
 ---
 
+## 🧪 Quality & Evaluation
+
+SwarmMind reports are **source-grounded**: every `[S#]` marker maps to a stable
+source ID in a per-run registry, and reports carry a `grounding` summary,
+`stop_reason`, `rounds_used`, `query` and `timestamp`. The UI renders citations
+as clickable links to source cards (title, kind badge, URL/path and the exact
+snippet), shows a grounding badge, and streams source cards as workers finish.
+
+Quality is measured with `swarmmind eval`, an **offline, deterministic-primary**
+harness over an 8-query golden set with local source documents. It checks valid
+citation IDs, source retrievability, quoted-span match, unsupported-claim count
+and source diversity. An optional **secondary** LLM judge (a *different*,
+blinded, order-randomized model) adds approximate faithfulness and answer
+relevance scores — it never judges its own generator's output and never
+replaces the deterministic metrics.
+
+```bash
+swarmmind eval --report                 # deterministic metrics only
+swarmmind eval --report --judge         # + approximate secondary judge
+swarmmind eval --output eval-report.md  # save Markdown
+```
+
+Every run records a **run manifest** (models, backends, config snapshot,
+timestamp, stop reason) for a one-command re-run. See
+[docs/EVALUATION.md](docs/EVALUATION.md) for the method, metric definitions,
+golden set and caveats, and [docs/REPRODUCIBILITY.md](docs/REPRODUCIBILITY.md)
+for manifests and the privacy note (web search/page fetch are opt-in).
+
+---
+
 ## 📄 License
 
 Apache 2.0 — see [LICENSE](LICENSE) for full terms.
@@ -260,6 +295,8 @@ Apache 2.0 — see [LICENSE](LICENSE) for full terms.
 |---|---|
 | [Setup Guide](SETUP.md) | Judge setup instructions, troubleshooting |
 | [CHANGELOG.md](CHANGELOG.md) | TDD audit fixes and methodology |
+| [EVALUATION.md](docs/EVALUATION.md) | Evaluation method, metrics, golden set and caveats |
+| [REPRODUCIBILITY.md](docs/REPRODUCIBILITY.md) | Run manifest, one-command re-run and privacy note |
 | [README.md](README.md) | Architecture, features, CLI reference |
 
 ---
