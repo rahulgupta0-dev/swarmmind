@@ -458,6 +458,66 @@ st.markdown(
         font-weight: 600 !important;
         color: #cbd5e1 !important;
     }
+
+    /* ---------- Citations, grounding badge & source cards (WP3) ---------- */
+    .grounding-badge {
+        display: inline-flex; align-items: center; gap: 0.5rem;
+        padding: 0.35rem 0.85rem; border-radius: 999px;
+        font-size: 0.8rem; font-weight: 700; letter-spacing: 0.01em;
+        margin: 0.25rem 0 0.9rem;
+        border: 1px solid transparent;
+    }
+    .grounding-badge .badge-dot {
+        width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+    }
+    .grounding-good { background: #064e3b; color: #a7f3d0; border-color: #10b981; }
+    .grounding-warn { background: #78350f; color: #fde68a; border-color: #f59e0b; }
+    a[href^="#source-"] {
+        color: #c4b5fd; font-weight: 700; text-decoration: underline;
+        text-underline-offset: 2px; padding: 0 1px;
+    }
+    a[href^="#source-"]:hover { color: #fff; background: rgba(139,92,246,0.25); border-radius: 4px; }
+    a[href^="#source-"]:focus-visible,
+    .source-card:focus-visible, .run-manifest summary:focus-visible {
+        outline: 3px solid #a78bfa; outline-offset: 2px;
+    }
+    .source-cards { display: flex; flex-direction: column; gap: 0.6rem; }
+    .source-card {
+        background: rgba(15, 23, 42, 0.75);
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        border-left: 4px solid #8b5cf6;
+        border-radius: 10px; padding: 0.7rem 0.9rem;
+        scroll-margin-top: 6rem;
+    }
+    .source-card:target { border-color: #a78bfa; box-shadow: 0 0 0 3px rgba(167,139,250,0.4); }
+    .source-unverified { border-left-color: #f59e0b; }
+    .source-card-head { display: flex; gap: 0.6rem; align-items: center;
+        font-size: 0.75rem; font-weight: 700; margin-bottom: 0.35rem; }
+    .source-id { color: #c4b5fd; }
+    .source-kind { color: #0b1020; background: #c4b5fd; padding: 0.05rem 0.45rem;
+        border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .source-unverified .source-kind { background: #fcd34d; }
+    .source-title { color: #f1f5f9; font-weight: 600; font-size: 0.9rem; }
+    .source-url { color: #93c5fd; font-family: 'JetBrains Mono', monospace;
+        font-size: 0.75rem; word-break: break-all; margin-top: 0.2rem; }
+    .source-snippet { color: #e2e8f0; border-left: 2px solid rgba(148,163,184,0.4);
+        padding-left: 0.6rem; margin: 0.5rem 0 0; font-size: 0.82rem; }
+    .source-empty { color: #fcd34d; font-size: 0.85rem; padding: 0.5rem 0; }
+    .live-sources .source-card { background: rgba(30, 27, 60, 0.8); }
+    .run-manifest { margin: 0.8rem 0; border: 1px solid rgba(148,163,184,0.3);
+        border-radius: 10px; background: rgba(0,0,0,0.25); }
+    .run-manifest summary { cursor: pointer; padding: 0.55rem 0.85rem;
+        font-weight: 700; font-size: 0.82rem; color: #cbd5e1; }
+    .manifest-body { padding: 0 0.9rem 0.6rem; color: #e2e8f0; font-size: 0.8rem; }
+    .claim-row { padding: 0.35rem 0.5rem; margin: 0.25rem 0; border-radius: 6px;
+        color: #e2e8f0; font-size: 0.82rem; }
+    .claim-status { font-weight: 700; margin-right: 0.35rem; }
+    .claim-ok { border-left: 3px solid #10b981; }
+    .claim-ok .claim-status { color: #6ee7b7; }
+    .claim-unverified { border-left: 3px solid #f59e0b; background: rgba(245,158,11,0.08); }
+    .claim-unverified .claim-status { color: #fcd34d; }
+    .badge-private { background: rgba(245,158,11,0.15); color: #fcd34d;
+        border: 1px solid rgba(245,158,11,0.4); }
 </style>
 """,
     unsafe_allow_html=True,
@@ -479,6 +539,14 @@ def _get_client(config: Config) -> LemonadeClient:
 
 
 _config = _load_config()
+# The privacy toggle in Sources mutates ``config.web.fetch_pages``. Persist it
+# across reruns even though the rest of the config is re-read from TOML.
+_saved_config = st.session_state.get("config")
+if _saved_config is not None:
+    try:
+        _config.web.fetch_pages = bool(_saved_config.web.fetch_pages)
+    except Exception:
+        pass
 _client = _get_client(_config)
 
 # ---------------------------------------------------------------------------
@@ -502,6 +570,9 @@ if "saved_notes" not in st.session_state:
 
 if "studio_action" not in st.session_state:
     st.session_state.studio_action = None
+
+if "jump_to_sources" not in st.session_state:
+    st.session_state.jump_to_sources = False
 
 if "hardware" not in st.session_state:
     st.session_state.hardware = None
@@ -574,6 +645,14 @@ dot_class = "ok" if is_ok else "error"
 # App chrome — dark header bar
 # ---------------------------------------------------------------------------
 
+_web_cfg = getattr(_config, "web", None)
+_external_lookup_enabled = bool(getattr(_web_cfg, "fetch_pages", False))
+_privacy_badge = (
+    '<span class="badge badge-private" role="status" '
+    'aria-label="External web lookups are enabled">external lookup enabled</span>'
+    if _external_lookup_enabled else ""
+)
+
 st.markdown(
     f"""
 <div class="app-chrome">
@@ -585,6 +664,7 @@ st.markdown(
         <a href="#" onclick="return false;">Docs</a>
         <a href="#" onclick="return false;">GitHub</a>
         {"&nbsp;"}
+        {_privacy_badge}
         <span class="badge badge-{'ok' if is_ok else 'err'}">
             <span class="status-dot {'ok' if is_ok else 'error'}"></span>
             {conn_status}

@@ -4,10 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import html
+import re
 from datetime import datetime
 from typing import Any
 
 from swarmmind.ui.components.icons import icon_html
+from swarmmind.ui.panels.chat import (
+    build_manifest_lines,
+    build_sources_appendix,
+    grounding_text,
+    link_citations,
+    source_cards_html,
+)
 
 # ---------------------------------------------------------------------------
 # Main render function
@@ -105,8 +114,8 @@ def render_studio_panel(st: Any, state: dict[str, Any]) -> None:
     st.markdown(f"### {icon_html('upload')} Export", unsafe_allow_html=True)
 
     if has_report:
-        md_content = _report_to_markdown(last_report)
-        html_content = _report_to_html(last_report)
+        md_content = _report_to_markdown(last_report, config_obj)
+        html_content = _report_to_html(last_report, config_obj)
 
         st.download_button(
             "Markdown",
@@ -274,16 +283,38 @@ def _generate_narration(
 
     with st.spinner("Generating narration…"):
         try:
-            audio_bytes = asyncio.run(
+            # WP5 contract: text_to_speech(text, model=None, voice="af") -> bytes
+            result = asyncio.run(
                 client.text_to_speech(
+                    summary[:1000],
                     model=config_obj.models.tts,
-                    input_text=summary[:1000],
-                    voice="default",
+                    voice="af",
                 ),
             )
+            audio_bytes = _audio_bytes(result)
+            if not audio_bytes:
+                st.warning("Narration returned no audio data.")
+                return
             st.audio(audio_bytes, format="audio/wav")
         except Exception as exc:
             st.error(f"Narration failed: {exc}")
+
+
+def _audio_bytes(result: Any) -> bytes:
+    """Normalise TTS output (raw bytes, or a b64 dict from older clients)."""
+    if isinstance(result, (bytes, bytearray)):
+        return bytes(result)
+    if isinstance(result, dict):
+        encoded = result.get("b64_json") or result.get("audio")
+        data = result.get("data")
+        if not encoded and isinstance(data, list) and data:
+            encoded = data[0].get("b64_json") if isinstance(data[0], dict) else None
+        if encoded:
+            try:
+                return base64.b64decode(encoded)
+            except Exception:
+                return b""
+    return b""
 
 
 def _generate_summary(
@@ -344,7 +375,7 @@ def _save_current_report(
 
     st.session_state.saved_notes.append({
         "title": report.get("title", "Untitled Report")[:80],
-        "content": _report_to_markdown(report),
+        "content": _report_to_markdown(report, state.get("config")),
         "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
     })
     state["saved_notes"] = st.session_state.saved_notes
@@ -360,8 +391,8 @@ def _save_current_report(
 # ---------------------------------------------------------------------------
 
 
-def _report_to_markdown(report: dict[str, Any]) -> str:
-    """Convert a report dict to a plain Markdown string."""
+def _report_to_markdown(report: dict[str, Any], config_obj: Any = None) -> str:
+    """Convert a report dict to a Markdown string with citations and appendix."""
     lines: list[str] = [
         f"# {report.get('title', 'Research Report')}",
         "",
@@ -370,26 +401,31 @@ def _report_to_markdown(report: dict[str, Any]) -> str:
     summary = report.get("executive_summary", "")
     if summary:
         lines.append("## Executive Summary")
-        lines.append(summary)
+        lines.append(link_citations(summary))
         lines.append("")
 
     for section in report.get("sections", []):
+        if not isinstance(section, dict):
+            continue
         heading = section.get("heading", "")
         content = section.get("content", "")
         if heading:
-            lines.append(f"## {heading}")
+            lines.append(f"## {link_citations(heading)}")
         if content:
-            lines.append(content)
+            lines.append(link_citations(content))
+        cites = section.get("sources") or []
+        if cites:
+            lines.append("**Cites:** " + " ".join(f"[{sid}](#source-{sid})" for sid in cites))
         lines.append("")
 
     conclusion = report.get("conclusion", "")
     if conclusion:
         lines.append("## Conclusion")
-        lines.append(conclusion)
+        lines.append(link_citations(conclusion))
         lines.append("")
 
     for c in report.get("contradictions", []):
-        lines.append(f"- [!] {c}")
+        lines.append(f"- [!] {link_citations(c)}")
     if report.get("contradictions"):
         lines.append("")
 
@@ -398,12 +434,18 @@ def _report_to_markdown(report: dict[str, Any]) -> str:
     if report.get("follow_up_questions"):
         lines.append("")
 
+    lines.append("## Grounding")
+    lines.append(grounding_text(report))
+    lines.append("")
+    lines.extend(build_sources_appendix(report))
+    lines.extend(build_manifest_lines(report, config_obj))
+
     return "\n".join(lines)
 
 
-def _report_to_html(report: dict[str, Any]) -> str:
-    """Convert a report dict to a standalone HTML document."""
-    md = _report_to_markdown(report)
+def _report_to_html(report: dict[str, Any], config_obj: Any = None) -> str:
+    """Convert a report dict to a standalone HTML document with source cards."""
+    md = _report_to_markdown(report, config_obj)
 
     # Escape HTML special chars
     body = md.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -432,8 +474,16 @@ def _report_to_html(report: dict[str, Any]) -> str:
             lines.append(line)
 
     body = "\n".join(lines)
+    # Make [S1]-style markers actual in-page links in the HTML export.
+    body = re.sub(
+        r"\[([^\]]+)\]\((#[^)\s]+)\)",
+        r'<a href="\2" class="citation">[\1]</a>',
+        body,
+    )
 
-    title = report.get("title", "SwarmMind Report")
+    title = html.escape(str(report.get("title", "SwarmMind Report")))
+    grounding = html.escape(grounding_text(report))
+    cards = source_cards_html(report.get("sources") or [])
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -442,12 +492,28 @@ def _report_to_html(report: dict[str, Any]) -> str:
 <title>{title}</title>
 <style>
 body {{ font-family: -apple-system, system-ui, sans-serif; max-width: 800px;
-       margin: 0 auto; padding: 2em; line-height: 1.6; color: #1a1a2e; }}
-h1, h2, h3 {{ color: #1a1a2e; }}
+       margin: 0 auto; padding: 2em; line-height: 1.6; color: #14213d;
+       background: #fcfcff; }}
+h1, h2, h3 {{ color: #14213d; }}
 li {{ margin: 0.25em 0; }}
+a.citation {{ color: #5b21b6; font-weight: 600; text-decoration: underline; }}
+a.citation:focus-visible {{ outline: 2px solid #5b21b6; outline-offset: 2px; }}
+.grounding-badge {{ display: inline-block; padding: .4em .8em; border-radius: 999px;
+       background: #e0e7ff; color: #1e1b4b; border: 1px solid #a5b4fc; font-weight: 600; }}
+.source-card {{ border: 1px solid #c7d2fe; border-left: 4px solid #6366f1;
+       border-radius: 8px; padding: .75em 1em; margin: .6em 0; background: #fff; }}
+.source-card:target {{ outline: 3px solid #6366f1; background: #eef2ff; }}
+.source-card-head {{ font-size: .85em; color: #3730a3; display: flex; gap: .75em; }}
+.source-title {{ font-weight: 700; }}
+.source-url {{ font-family: monospace; font-size: .85em; color: #1d4ed8; word-break: break-all; }}
+.source-snippet {{ margin: .5em 0 0; color: #374151; }}
+.source-unverified {{ border-left-color: #d97706; }}
 </style>
 </head>
 <body>
+<div class="grounding-badge" role="status" aria-label="Grounding: {grounding}">{grounding}</div>
 {body}
+<h2>Sources</h2>
+{cards}
 </body>
 </html>"""

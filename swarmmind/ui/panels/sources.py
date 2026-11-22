@@ -147,14 +147,33 @@ def render_sources_panel(st: Any, state: dict[str, Any]) -> None:
             st.markdown("**Project Sources**")
             for src in sources:
                 _render_source_row(st, src)
+            if any(
+                str(getattr(src, "status", "")) in ("pending", "processing")
+                for src in sources
+            ):
+                _inject_status_refresh(st)
+                st.caption("Ingestion in progress — status updates automatically…")
         else:
             st.caption("No sources yet. Add one below.")
+
+        if st.button("Refresh statuses", key="refresh_source_status", use_container_width=True):
+            st.rerun()
 
     st.divider()
     # ------------------------------------------------------------------
     # Add Source form
     # ------------------------------------------------------------------
-    with st.expander("Add Source", expanded=False):
+    jump = bool(st.session_state.get("jump_to_sources"))
+    if jump:
+        st.session_state.jump_to_sources = False
+        st.markdown('<div id="source-add-anchor"></div>', unsafe_allow_html=True)
+        st.markdown(
+            "<script>setTimeout(function(){var el=document.getElementById("
+            "'source-add-anchor'); if(el){el.scrollIntoView({behavior:'smooth'});}}, 60);"
+            "</script>",
+            unsafe_allow_html=True,
+        )
+    with st.expander("Add Source", expanded=jump):
         _render_add_source_form(st, state, db)
 
     st.divider()
@@ -162,11 +181,26 @@ def render_sources_panel(st: Any, state: dict[str, Any]) -> None:
     # ------------------------------------------------------------------
     # Settings
     # ------------------------------------------------------------------
-    st.checkbox(
-        "Enable web search",
-        value=True,
+    web_cfg = getattr(config_obj, "web", None)
+    fetch_default = bool(getattr(web_cfg, "fetch_pages", True))
+    web_enabled = st.checkbox(
+        "Enable web search / page fetching",
+        value=fetch_default,
         key="sources_web_search",
+        help="Opt in to external lookups. When off, results stay 100% local.",
     )
+    if web_cfg is not None and web_enabled != fetch_default:
+        try:
+            web_cfg.fetch_pages = web_enabled
+        except Exception:
+            pass
+        st.session_state.config = config_obj
+        state["config"] = config_obj
+        if not web_enabled:
+            st.session_state.chat_web_search = False
+        st.rerun()
+    if web_enabled:
+        st.caption("External lookups enabled — fetched page content may leave this machine.")
     st.slider(
         "RAG top-K",
         min_value=1,
@@ -423,14 +457,34 @@ def _ingest_source_background(
 
 
 # ---------------------------------------------------------------------------
-# Source row rendering
+# Source row rendering / live status refresh
 # ---------------------------------------------------------------------------
 
 
+def _inject_status_refresh(st: Any, seconds: int = 2, max_refreshes: int = 20) -> None:
+    """Auto-refresh the page while a source is pending/processing.
+
+    Streamlit only re-renders on interaction, so a short timed reload makes
+    ``pending → processing → ready/error`` visible live. The reload count is
+    capped to avoid an endless loop on a stuck ingestion.
+    """
+    count = int(st.session_state.get("source_refresh_count", 0) or 0)
+    if count >= max_refreshes:
+        st.caption("Ingestion is taking longer than expected — use Refresh statuses.")
+        return
+    st.session_state.source_refresh_count = count + 1
+    st.markdown(
+        f'<script>setTimeout(function(){{window.location.reload();}}, '
+        f'{seconds * 1000});</script>',
+        unsafe_allow_html=True,
+    )
+
+
 def _render_source_row(st: Any, source: Source) -> None:
-    """Render a single source with type icon, name and status indicator."""
+    """Render a single source with type icon, name and accessible status text."""
     icon_name = _SOURCE_ICONS.get(source.source_type, _SOURCE_ICONS["default"])
-    indicator_icon_name = _STATUS_INDICATORS.get(source.status, "hourglass")
+    status = str(getattr(source, "status", "pending") or "pending")
+    indicator_icon_name = _STATUS_INDICATORS.get(status, "hourglass")
     indicator = icon_html(indicator_icon_name, "regular", "1.2em")
     icon_markup = icon_html(icon_name, "regular", "1.2em")
     display = source.display_name or source.source_uri[:40]
@@ -442,4 +496,8 @@ def _render_source_row(st: Any, source: Source) -> None:
             unsafe_allow_html=True,
         )
     with col2:
-        st.markdown(indicator, unsafe_allow_html=True)
+        st.markdown(
+            f'<span role="status" aria-label="Ingestion status: {status}">'
+            f"{indicator} <small>{status}</small></span>",
+            unsafe_allow_html=True,
+        )
