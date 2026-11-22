@@ -72,7 +72,11 @@ def test_doctor_healthy(cli, monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert result.output.count("[PASS]") == 7
     assert "[PASS] Hardware / backend: Backend rocm, devices Radeon" in result.output
-    assert "Summary: 7 passed, 0 warning(s), 0 failed" in result.output
+    # The two new informational checks are WARN for this older-style mock
+    # server (no capability labels, no backend list) and never fail the run.
+    assert "[WARN] Capabilities: No capability metadata reported by server" in result.output
+    assert "[WARN] Backends: No backend list reported" in result.output
+    assert "Summary: 7 passed, 2 warning(s), 0 failed" in result.output
     assert "Next steps:" in result.output
     for command in (
         "swarmmind doctor",
@@ -131,11 +135,16 @@ def test_doctor_json_stdout_is_pure_and_masks_api_key(cli, monkeypatch) -> None:
     assert result.stdout.lstrip().startswith("{")
     payload = json.loads(result.stdout)
     assert payload["status"] == "ok"
-    assert payload["summary"] == {"PASS": 5, "WARN": 2, "FAIL": 0}
+    assert payload["summary"] == {"PASS": 5, "WARN": 4, "FAIL": 0}
     assert [c["name"] for c in payload["checks"]] == [
         "python", "imports", "config", "data_dir",
-        "lemonade_health", "models", "system_info",
+        "lemonade_health", "models", "capabilities", "backends", "system_info",
     ]
+    assert payload["capabilities"] == {
+        "vision": 0, "image": 0, "tts": 0,
+        "transcription": 0, "tool_calling": 0, "omni": 0,
+    }
+    assert payload["backends"] == []
     config_check = payload["checks"][2]
     assert config_check["api_key_present"] is True
     assert config_check["api_key_masked"] == "****ey"
@@ -146,7 +155,10 @@ def test_doctor_json_stdout_is_pure_and_masks_api_key(cli, monkeypatch) -> None:
     assert secret not in result.stdout
     assert secret not in result.stderr
     assert "WARN models: 0 model(s) visible" in result.stderr
+    assert "WARN capabilities: No capability metadata reported by server" in result.stderr
+    assert "WARN backends: No backend list reported" in result.stderr
     assert "WARN models:" not in result.stdout
+    assert "WARN capabilities:" not in result.stdout
 
 
 def test_doctor_json_exit_code_one_on_failure(cli, monkeypatch) -> None:
@@ -168,3 +180,132 @@ def test_doctor_help_documents_json_flag(cli) -> None:
     assert result.exit_code == 0, result.output
     assert "--json" in result.output
     assert "actionable next steps" in result.output
+
+
+def test_doctor_capabilities_and_backends_present(cli, monkeypatch) -> None:
+    """Capability labels and a backend list are reported in text and JSON."""
+    models = [
+        {"id": "vision-model", "labels": ["vision", "image", "tts"]},
+        {"id": "whisper", "capabilities": {"transcription": True, "tool-calling": True}},
+        {"id": "LMX-Omni-5.5B-Lite", "capabilities": ["omni", "vision"]},
+    ]
+    info = {
+        "backend": "rocm",
+        "data": {"backends": ["rocm", "vulkan", "flm", "cpu"]},
+    }
+    monkeypatch.setattr(
+        cli_main, "_doctor_client",
+        lambda config: _FakeClient(
+            health={"status": "ok", "code": 200}, models=models, info=info,
+        ),
+    )
+
+    result = cli.invoke(cli_main.main, ["doctor", "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert [c["name"] for c in payload["checks"]] == [
+        "python", "imports", "config", "data_dir",
+        "lemonade_health", "models", "capabilities", "backends", "system_info",
+    ]
+    expected_counts = {
+        "vision": 2, "image": 1, "tts": 1,
+        "transcription": 1, "tool_calling": 1, "omni": 1,
+    }
+    cap = payload["checks"][6]
+    assert cap["name"] == "capabilities" and cap["status"] == "PASS"
+    assert cap["capabilities"] == expected_counts
+    assert cap["metadata_available"] is True
+    assert cap["models_inspected"] == 3
+    assert "vision=2, image=1, tts=1, omni=1" in cap["detail"]
+    assert payload["capabilities"] == expected_counts
+
+    back = payload["checks"][7]
+    assert back["name"] == "backends" and back["status"] == "PASS"
+    assert back["backends"] == ["rocm", "vulkan", "flm", "cpu"]
+    assert payload["backends"] == back["backends"]
+    assert payload["summary"] == {"PASS": 9, "WARN": 0, "FAIL": 0}
+
+    # The human-readable output exposes the same information.
+    text = cli.invoke(cli_main.main, ["doctor"])
+    assert text.exit_code == 0, text.output
+    assert "[PASS] Capabilities: vision=2, image=1, tts=1, omni=1" in text.output
+    assert "transcription=1, tool-calling=1" in text.output
+    assert "[PASS] Backends: Available backends: rocm, vulkan, flm, cpu" in text.output
+
+
+def test_doctor_capabilities_metadata_absent_is_a_warning(cli, monkeypatch) -> None:
+    """Older/mock servers without capability metadata WARN but still pass."""
+    monkeypatch.setattr(
+        cli_main, "_doctor_client",
+        lambda config: _FakeClient(
+            health={"status": "ok", "code": 200},
+            models=[{"id": "plain-a"}, {"id": "plain-b"}],
+            info={"backend": "rocm"},
+        ),
+    )
+    result = cli.invoke(cli_main.main, ["doctor", "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    cap = next(c for c in payload["checks"] if c["name"] == "capabilities")
+    assert cap["status"] == "WARN"
+    assert cap["detail"] == "No capability metadata reported by server"
+    assert cap["metadata_available"] is False
+    assert cap["models_inspected"] == 2
+    assert cap["capabilities"]["vision"] == 0
+    assert payload["status"] == "ok"
+    assert payload["summary"]["FAIL"] == 0
+    assert "WARN capabilities: No capability metadata reported by server" in result.stderr
+
+    text = cli.invoke(cli_main.main, ["doctor"])
+    assert text.exit_code == 0
+    assert "[WARN] Capabilities: No capability metadata reported by server" in text.output
+    assert "Traceback" not in text.output
+
+
+def test_doctor_backends_from_nested_data(cli, monkeypatch) -> None:
+    """``data.backends`` also accepts dict entries and deduplicates names."""
+    monkeypatch.setattr(
+        cli_main, "_doctor_client",
+        lambda config: _FakeClient(
+            health={"status": "ok", "code": 200},
+            models=[{"id": "plain"}],
+            info={"data": {"backends": [{"name": "flm"}, {"name": "cpu"}, {"backend": "rocm"}]}},
+        ),
+    )
+    result = cli.invoke(cli_main.main, ["doctor", "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    back = next(c for c in payload["checks"] if c["name"] == "backends")
+    assert back["status"] == "PASS"
+    assert back["backends"] == ["flm", "cpu", "rocm"]
+    assert "[PASS] Backends: Available backends: flm, cpu, rocm" in cli.invoke(
+        cli_main.main, ["doctor"],
+    ).output
+
+
+def test_doctor_capabilities_requests_show_all_when_supported(cli, monkeypatch) -> None:
+    """A client that can ask for show_all gets the richer model metadata."""
+
+    class _ShowAllClient(_FakeClient):
+        def __init__(self) -> None:
+            super().__init__(health={"status": "ok", "code": 200}, models=[])
+            self.show_all_calls: list[bool] = []
+
+        async def get_models(self, show_all: bool = False):
+            self.show_all_calls.append(show_all)
+            return [{"id": "vision-model", "labels": ["vision", "tts"]}]
+
+    holder: dict[str, _ShowAllClient] = {}
+
+    def _factory(config):
+        holder["client"] = _ShowAllClient()
+        return holder["client"]
+
+    monkeypatch.setattr(cli_main, "_doctor_client", _factory)
+    result = cli.invoke(cli_main.main, ["doctor", "--json"])
+    assert result.exit_code == 0, result.stderr
+    assert holder["client"].show_all_calls == [False, True]
+    payload = json.loads(result.stdout)
+    cap = payload["checks"][6]
+    assert cap["capabilities"]["vision"] == 1
+    assert cap["capabilities"]["tts"] == 1

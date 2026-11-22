@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import inspect
 import json
 import logging
 import os
@@ -769,6 +770,8 @@ _DOCTOR_LABELS = {
     "data_dir": "Data directory",
     "lemonade_health": "Lemonade server",
     "models": "Models / Omni",
+    "capabilities": "Capabilities",
+    "backends": "Backends",
     "system_info": "Hardware / backend",
 }
 _DOCTOR_NEXT_STEPS = (
@@ -956,6 +959,195 @@ def _check_models(models: Any) -> dict[str, Any]:
     )
 
 
+# Capability reporting (Lemonade v2026.48+ /api/show metadata).  Tokens are
+# normalised to lower-case hyphenated form and mapped to one compact bucket.
+_DOCTOR_CAPABILITY_ALIASES = {
+    "vision": "vision", "visual": "vision", "image-input": "vision",
+    "image_input": "vision", "multimodal": "vision",
+    "image": "image", "image-generation": "image", "text-to-image": "image",
+    "diffusion": "image", "text2image": "image",
+    "tts": "tts", "audio": "tts", "speech": "tts", "voice": "tts",
+    "text-to-speech": "tts", "speech-generation": "tts",
+    "transcription": "transcription", "transcribe": "transcription",
+    "speech-to-text": "transcription", "stt": "transcription",
+    "asr": "transcription", "audio-transcription": "transcription",
+    "tool-calling": "tool_calling", "function-calling": "tool_calling",
+    "tools": "tool_calling", "tool_use": "tool_calling",
+    "omni": "omni", "omni-collection": "omni", "omnimodal": "omni",
+}
+_DOCTOR_CAPABILITY_MATCHERS = (
+    ("transcription", ("transcri", "speech-to-text", "speech recognition", "stt", "asr")),
+    ("tool_calling", ("tool-call", "function-call", "tools", "tool_use", "function")),
+    ("vision", ("vision", "visual", "image-input")),
+    ("image", ("image", "diffusion", "text2image")),
+    ("tts", ("tts", "text-to-speech", "speech", "audio", "voice")),
+    ("omni", ("omni",)),
+)
+_DOCTOR_CAPABILITY_FIELDS = ("capabilities", "labels", "metadata")
+
+
+def _doctor_flatten_capabilities(value: Any) -> list[str]:
+    """Flatten a labels/capabilities value into individual token strings."""
+    out: list[str] = []
+    if isinstance(value, str):
+        out.extend(part for part in re.split(r"[,\s|]+", value) if part)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            out.extend(_doctor_flatten_capabilities(item))
+    elif isinstance(value, dict):
+        for key, val in value.items():
+            if isinstance(val, bool):
+                if val:
+                    out.append(str(key))
+                continue
+            out.append(str(key))
+            out.extend(_doctor_flatten_capabilities(val))
+    return out
+
+
+def _doctor_capability_bucket(token: str) -> str | None:
+    """Map a capability token to a compact reporting bucket."""
+    normalised = re.sub(r"[_\s]+", "-", str(token).strip().lower()).strip("-")
+    if not normalised:
+        return None
+    if normalised in _DOCTOR_CAPABILITY_ALIASES:
+        return _DOCTOR_CAPABILITY_ALIASES[normalised]
+    for bucket, needles in _DOCTOR_CAPABILITY_MATCHERS:
+        if any(needle in normalised for needle in needles):
+            return bucket
+    return None
+
+
+def _check_capabilities(models: Any) -> dict[str, Any]:
+    """Report which Omni-style capabilities the server advertises."""
+    if isinstance(models, dict):
+        models = models.get("data", [])
+    if not isinstance(models, list):
+        models = []
+
+    counts = {
+        "vision": 0, "image": 0, "tts": 0,
+        "transcription": 0, "tool_calling": 0, "omni": 0,
+    }
+    has_metadata = False
+    inspected = 0
+    omni_models: list[str] = []
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        inspected += 1
+        name = str(model.get("id") or model.get("name") or "")
+        if name and _is_omni_model(name):
+            omni_models.append(name)
+        tokens = [
+            token
+            for field in _DOCTOR_CAPABILITY_FIELDS
+            for token in _doctor_flatten_capabilities(model.get(field))
+        ]
+        buckets: set[str] = set()
+        for token in tokens:
+            bucket = _doctor_capability_bucket(token)
+            if bucket:
+                buckets.add(bucket)
+        if buckets:
+            has_metadata = True
+        for bucket in buckets:
+            counts[bucket] += 1
+    if omni_models:
+        counts["omni"] = max(counts["omni"], len(omni_models))
+
+    extra = {
+        "capabilities": counts,
+        "metadata_available": has_metadata,
+        "models_inspected": inspected,
+        "omni_models": omni_models,
+    }
+    if not has_metadata:
+        # Informational only: an older/mock server simply lacks the metadata.
+        return _doctor_check(
+            "capabilities", "WARN", "No capability metadata reported by server", **extra,
+        )
+    summary = (
+        f"vision={counts['vision']}, image={counts['image']}, "
+        f"tts={counts['tts']}, omni={counts['omni']} "
+        f"(transcription={counts['transcription']}, tool-calling={counts['tool_calling']})"
+    )
+    return _doctor_check("capabilities", "PASS", summary, **extra)
+
+
+def _client_supports_show_all(client: Any) -> bool:
+    """True when the client's get_models accepts a ``show_all`` argument."""
+    getter = getattr(client, "get_models", None)
+    if getter is None:
+        return False
+    try:
+        params = inspect.signature(getter).parameters
+    except (TypeError, ValueError):
+        return False
+    return "show_all" in params or any(
+        param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()
+    )
+
+
+def _doctor_backend_names(info: Any) -> list[str]:
+    """Extract backend names from ``data.backends`` / ``backends``."""
+    if not isinstance(info, dict):
+        return []
+    raw = info.get("backends")
+    if raw is None:
+        data = info.get("data")
+        if isinstance(data, dict):
+            raw = data.get("backends")
+        elif isinstance(data, list):
+            raw = data
+    if raw is None:
+        return []
+
+    names: list[str] = []
+    if isinstance(raw, dict):
+        for key, val in raw.items():
+            if isinstance(val, bool) and not val:
+                continue
+            names.append(str(key))
+    elif isinstance(raw, str):
+        names.extend(part for part in re.split(r"[,\s]+", raw) if part)
+    elif isinstance(raw, (list, tuple, set)):
+        for item in raw:
+            if isinstance(item, dict):
+                name = (
+                    item.get("name") or item.get("backend") or
+                    item.get("id") or item.get("value")
+                )
+                if name:
+                    names.append(str(name))
+            elif item:
+                names.append(str(item))
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for name in names:
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(name)
+    return unique
+
+
+def _check_backends(info: Any) -> dict[str, Any]:
+    """Report the backends advertised by /v1/system-info (informational)."""
+    names = _doctor_backend_names(info)
+    if not names:
+        return _doctor_check(
+            "backends", "WARN",
+            "No backend list reported by /v1/system-info (mock or unsupported server)",
+            backends=[],
+        )
+    return _doctor_check(
+        "backends", "PASS", "Available backends: " + ", ".join(names),
+        backends=names,
+    )
+
+
 def _check_system_info(info: Any) -> dict[str, Any]:
     summary = _parse_system_info(info)
     if not summary["available"]:
@@ -997,6 +1189,8 @@ def doctor(as_json: bool) -> None:
     server (health, models, hardware) without making long network waits.
     """
     diag = _diagnostics(stderr=True)
+    capabilities_summary: dict[str, int] = {}
+    backends_list: list[str] = []
 
     checks: list[dict[str, Any]] = [
         _check_python(),
@@ -1050,11 +1244,29 @@ def doctor(as_json: bool) -> None:
                 checks.append(_check_models(models))
             except Exception as exc:  # noqa: BLE001
                 checks.append(_doctor_check("models", "WARN", f"Could not list models: {exc}"))
+                models = []
+
+            # Informational: richer /v1/models metadata when the client can
+            # ask for show_all; otherwise reuse the list already fetched above.
+            capability_models = models
+            if _client_supports_show_all(client):
+                try:
+                    with _quiet_client_logs():
+                        capability_models = asyncio.run(client.get_models(show_all=True))
+                except Exception:  # noqa: BLE001 - never print raw exceptions here
+                    capability_models = models
+            capability_check = _check_capabilities(capability_models)
+            checks.append(capability_check)
+            capabilities_summary = capability_check.get("capabilities", {})
+
             try:
                 with _quiet_client_logs():
                     info = asyncio.run(client.system_info())
             except Exception:  # noqa: BLE001
                 info = {}
+            backends_check = _check_backends(info)
+            checks.append(backends_check)
+            backends_list = backends_check.get("backends", [])
             checks.append(_check_system_info(info))
 
     counts = {
@@ -1067,6 +1279,8 @@ def doctor(as_json: bool) -> None:
         "checks": checks,
         "summary": counts,
         "next_steps": list(_DOCTOR_NEXT_STEPS),
+        "capabilities": capabilities_summary,
+        "backends": backends_list,
     }
 
     if as_json:
