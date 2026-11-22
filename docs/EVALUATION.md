@@ -89,6 +89,25 @@ swarmmind eval --report --judge
 **measurement pipeline end-to-end**, not the quality of a real generator model.
 To evaluate real models, pass a configured `client=` to `run_eval(...)`.
 
+## Token accounting on FLM 1.0.11+ (verified 2026-11-22)
+
+Upstream v2026.46.2 / PR
+[#4037](https://github.com/lemonade-sdk/lemonade/pull/4037) changed FLM 1.0.11
+so streaming token usage is emitted **only** when the request sets
+`stream_options.include_usage`; without it, `/api/v1/stats` records no token
+counts or TPS. SwarmMind's concurrent code action adds that flag to streaming
+chat calls and makes `swarmmind benchmark` consume real usage chunks rather than
+the previous `len(content.split())` word-count estimate — otherwise token
+counts and tokens/sec would be empty/misleading on FLM 1.0.11+. These are
+throughput measurements, not a quality or leaderboard result.
+
+For the verifiable "deep-dive performance eval" artifact, the top next action
+on real AMD hardware is `lemonade bench --submit` (PR
+[#3284](https://github.com/lemonade-sdk/lemonade/pull/3284); CLI docs
+https://lemonade-server.ai/docs/guide/cli/), which uploads results and prints a
+bench.lemonade-server.ai claim link. **Not run here** (no AMD hardware/server),
+so no leaderboard claim is made. See [CHALLENGE-STATUS.md](CHALLENGE-STATUS.md).
+
 ## Limitations and caveats
 
 1. Eight queries is a smoke test, not a benchmark; no statistical significance

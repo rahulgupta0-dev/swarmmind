@@ -37,19 +37,32 @@ it is the **review backlog** AMD described. Our job is to stay visible and make
 the submission easy to review — especially against the Omni emphasis — without
 claiming a result that has not happened.
 
+## Top recommended next action (verified 2026-11-22)
+
+**Run `lemonade bench --submit` on a real AMD machine, save the claim link, and
+put it in README/blog as the verifiable "deep-dive performance eval" artifact.**
+`--submit` is real (PR [#3284](https://github.com/lemonade-sdk/lemonade/pull/3284),
+merged 2026-10-28; docs https://lemonade-server.ai/docs/guide/cli/): it uploads
+results to the benchmark service and prints a claim link for
+bench.lemonade-server.ai. Submission progress goes to stderr, so
+`bench --submit --json > results.json` works. **NOT run here** — no AMD hardware
+and no Lemonade server — so **no leaderboard claim** is made.
+
 ## Action plan
 
-1. **Refresh the demo** — keep the demo video and quick-start current so a
+1. **Run `lemonade bench --submit` on real AMD hardware** (top action above) and
+   publish the claim link as the auditable performance artifact.
+2. **Refresh the demo** — keep the demo video and quick-start current so a
    reviewer can reproduce a run quickly.
-2. **Post in the Omni channel** — share a concise Omni-focused summary in
+3. **Post in the Omni channel** — share a concise Omni-focused summary in
    `<#1471558634155544637>` (vision, Kokoro TTS, read-aloud, local-first).
-3. **Add the badge only if selected** — do not display it before selection.
-4. **Keep the discussion updated** — add progress and responses to
+4. **Add the badge only if selected** — do not display it before selection.
+5. **Keep the discussion updated** — add progress and responses to
    discussions/2792 as review resumes.
-5. **Publish the eval + benchmark deep-dive** — surface `swarmmind eval`
+6. **Publish the eval + benchmark deep-dive** — surface `swarmmind eval`
    results and the cross-backend benchmark write-up (see
    [EVALUATION.md](EVALUATION.md)) so claims are auditable.
-6. **Be honest about hardware** — end-to-end hardware validation still
+7. **Be honest about hardware** — end-to-end hardware validation still
    **requires an AMD machine**; results from non-AMD environments do not prove
    NPU/ROCm behaviour. Say so explicitly rather than implying it was verified.
 
@@ -60,3 +73,4 @@ claiming a result that has not happened.
 - Submission discussion — https://github.com/lemonade-sdk/lemonade/discussions/2792
 - Challenge badge — https://github.com/lemonade-sdk/assets/tree/main/challenge
 - Project repo — https://github.com/rahulgupta0-dev/swarmmind
+- `lemonade bench --submit` — PR https://github.com/lemonade-sdk/lemonade/pull/3284; CLI docs https://lemonade-server.ai/docs/guide/cli/

@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caption.
 - **Newcomer docs**: `docs/QUICKSTART.md` (clone to cited report in 5 minutes)
   and `docs/TROUBLESHOOTING.md` (symptom → fix table).
+- **Upstream-watch doc updates (2026-11-22)**: dated, sourced findings in
+  `docs/UPSTREAM-WATCH.md`, `docs/COMPATIBILITY.md`, `docs/CHALLENGE-STATUS.md`
+  and `docs/EVALUATION.md` covering FLM 1.0.11 usage gating, `/models` field
+  nesting, `lemonade bench --submit`, FLM v1.0.13 RC embeddings, and the kokoro
+  `voice` / device-reporting corrections. No leaderboard or hardware claim.
+
+### Fixed
+
+- **Streaming token usage on FLM 1.0.11+**: streaming chat calls now set
+  `stream_options.include_usage` and the benchmark consumes real usage chunks
+  instead of word-count estimates, so `/api/v1/stats` records token counts and
+  TPS (upstream v2026.46.2 / PR #4037).
 
 ## [0.4.0] - 2026-11-22
 

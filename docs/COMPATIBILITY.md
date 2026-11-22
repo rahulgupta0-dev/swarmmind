@@ -13,9 +13,40 @@ Sources: [Lemonade Server docs](https://lemonade-server.ai/docs/), upstream
 
 | Release | Upstream change | SwarmMind status |
 |---|---|---|
+| v2026.46.2 | FLM 1.0.11 gated streaming usage; `/models` field nesting; new 400s | Stream-usage fix (concurrent); other items not applicable |
 | v2026.45.3 | Consistent errors, 405/400 status codes, cancellation tokens/job routes | Partly adapted (friendly 400 hint); rest recommended |
 | v2026.47.1 | Auth change; multi-shard `/files` | Auth implemented; `/files` not consumed |
 | v2026.48.x (RC) | FLM NPU embeddings; multimodal fields; 400 for non-LLM models | Embeddings/400 handled; RC-only fields recommended only |
+
+## v2026.46.2 — FLM 1.0.11 usage gating and `/models` fields (2026-11-04)
+
+Verified 2026-11-22. Sources:
+[PR #4037](https://github.com/lemonade-sdk/lemonade/pull/4037) and
+[PR #4049](https://github.com/lemonade-sdk/lemonade/pull/4049)
+([release notes](https://github.com/lemonade-sdk/lemonade/releases/tag/v2026.46.2)).
+
+Verified changes:
+
+- FLM 1.0.11 emits streaming token usage **only** when the request sets
+  `stream_options.include_usage`. Without it, `/api/v1/stats` records no token
+  counts or TPS. The release also returns **400** for OpenAI multi-message
+  history to single-turn `*-flash` models, invalid `tool_choice`/
+  `response_format`, forced tool calls on small Qwen3 models, and requests with
+  no messages/prompt.
+- `/models` no longer returns top-level `image_defaults`/`audio_defaults`;
+  those values are nested under `recipe_options`.
+
+SwarmMind response:
+
+- **Code action (concurrent).** `LemonadeClient` adds
+  `stream_options.include_usage` on streaming chat calls and the benchmark
+  consumes real usage chunks instead of word-count estimates, so token counts
+  and TPS are recorded on FLM 1.0.11+.
+- **Not applicable — flash-history 400.** `conductor.py` and `synthesis.py`
+  embed prior turns into a single user-prompt text block, not OpenAI
+  multi-message history. Caveat only if we ever move to API-level history.
+- **Not applicable — `/models` fields.** SwarmMind does not read
+  `image_defaults`/`audio_defaults`/`recipe_options`.
 
 ## v2026.45.3 — HTTP server rebuild (2026-11-04)
 
