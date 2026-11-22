@@ -49,6 +49,12 @@ _STATUS_LABELS: dict[str, str] = {
     "error": "Error — ingestion failed",
 }
 
+# One-line first-run hint: why a source matters and where to paste your own text.
+SOURCE_HELP_CAPTION: str = (
+    "Grounded answers need a source: add a PDF, URL, YouTube video, or paste "
+    "your own text below — choose **Text** in Add Source to paste it."
+)
+
 
 def _esc(value: Any) -> str:
     return html.escape("" if value is None else str(value), quote=True)
@@ -79,6 +85,7 @@ def render_sources_panel(st: Any, state: dict[str, Any]) -> None:
             ``current_project``.
     """
     st.markdown(f"### {icon_html('books')} Sources", unsafe_allow_html=True)
+    st.caption(SOURCE_HELP_CAPTION)
 
     db = state.get("db")
     config_obj = state.get("config")

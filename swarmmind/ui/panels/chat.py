@@ -46,6 +46,76 @@ _CITATION_MARKER_RE = re.compile(r"\[(S\d+)\]")
 
 
 # ---------------------------------------------------------------------------
+# First-run onboarding — pure helpers shared with the main app
+# ---------------------------------------------------------------------------
+
+GETTING_STARTED_STEPS: tuple[str, ...] = (
+    "**Start Lemonade** — run `lemonade-server start`. If you have no AMD "
+    "hardware, run `python tests/mock_lemonade_server.py` instead.",
+    "**Add a source** in the Sources panel — a PDF, URL, YouTube video, or "
+    "pasted text. Add a PDF, URL, or note to ground your research.",
+    "**Ask a question** in the Chat panel, then click a [S#] citation to see "
+    "the evidence behind the answer.",
+)
+DOCTOR_HINT: str = "Run `swarmmind doctor` to diagnose setup"
+TROUBLESHOOTING_DOC: str = "docs/TROUBLESHOOTING.md"
+
+_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+_INLINE_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
+
+
+def onboarding_text(*, include_hint: bool = True) -> str:
+    """Plain-Markdown text of the three numbered getting-started steps."""
+    lines = ["**Getting started**", ""]
+    lines += [f"{i}. {step}" for i, step in enumerate(GETTING_STARTED_STEPS, 1)]
+    if include_hint:
+        lines += ["", DOCTOR_HINT]
+    return "\n".join(lines)
+
+
+def onboarding_html(*, include_hint: bool = True) -> str:
+    """Compact HTML version of the getting-started card body (for app.py)."""
+    items = "".join(f"<li>{_inline_md(step)}</li>" for step in GETTING_STARTED_STEPS)
+    hint = ""
+    if include_hint:
+        hint = f'<p class="onboarding-hint">{_inline_md(DOCTOR_HINT)}</p>'
+    return f"<ol>{items}</ol>{hint}"
+
+
+def onboarding_needed(
+    *, connected: bool, source_count: int, dismissed: bool = False,
+) -> bool:
+    """Whether the first-run card should be visible.
+
+    The card is an inline, non-modal element, so it never blocks the panels
+    while visible. It is hidden once the app is fully usable (connected *and*
+    sources exist) or when the user dismisses it.
+    """
+    if dismissed:
+        return False
+    return (not connected) or source_count <= 0
+
+
+def actionable_connection_message(
+    error: Any = None, *, stage: str = "connection",
+) -> str:
+    """Build an actionable, traceback-free message for a Lemonade failure.
+
+    *error* is accepted so call sites can pass the caught exception, but its
+    raw text is deliberately never shown in the UI.
+    """
+    _ = error  # intentionally not rendered — no raw exceptions in the UI
+    label = (stage or "connection").strip()
+    fallback_cmd = "python tests/mock_lemonade_server.py"
+    return (
+        f"SwarmMind could not complete the {label}: the local Lemonade server "
+        "is not reachable. Start it with `lemonade-server start` (no AMD "
+        f"hardware? run `{fallback_cmd}`). See `{TROUBLESHOOTING_DOC}` for "
+        "diagnosis steps."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Citation / grounding rendering helpers (shared with Studio exports)
 # ---------------------------------------------------------------------------
 
@@ -164,6 +234,13 @@ def _esc(value: Any) -> str:
     return html.escape("" if value is None else str(value), quote=True)
 
 
+def _inline_md(value: str) -> str:
+    """Escape *value*, then render the small Markdown subset used onboarding."""
+    safe = _esc(value)
+    safe = _INLINE_CODE_RE.sub(r"<code>\1</code>", safe)
+    return _INLINE_BOLD_RE.sub(r"<strong>\1</strong>", safe)
+
+
 def source_cards_html(sources: Any, *, heading: str = "Sources") -> str:
     """Render citable source cards with stable ``#source-S1`` anchors.
 
@@ -277,6 +354,9 @@ def render_chat_panel(st: Any, state: dict[str, Any]) -> None:
 
     # Load persisted conversations from the DB (once per project selection)
     _load_past_conversations(st, state)
+
+    # First-run guide — only when there is no report and no history to show.
+    render_onboarding_empty_state(st, state)
 
     # Grounded empty state — tell new users how to ground a research run.
     _render_grounded_empty_state(st, state)
@@ -398,8 +478,26 @@ def render_chat_panel(st: Any, state: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Grounded empty state
+# Grounded empty state / first-run guide
 # ---------------------------------------------------------------------------
+
+
+def needs_onboarding_empty_state(state: dict[str, Any] | None) -> bool:
+    """True when the chat has neither a report nor any history to display."""
+    state = state or {}
+    return not state.get("last_report") and not state.get("conversation_history")
+
+
+def render_onboarding_empty_state(st: Any, state: dict[str, Any] | None) -> bool:
+    """Render the three-step getting-started card in an otherwise empty chat.
+
+    Returns True when the card was rendered, False when there is already a
+    report or conversation history to show.
+    """
+    if not needs_onboarding_empty_state(state):
+        return False
+    st.markdown(onboarding_text())
+    return True
 
 
 def _configured_source_count(state: dict[str, Any]) -> int:
@@ -542,13 +640,7 @@ def _run_swarm(
     chroma = state.get("chroma")
 
     if not client:
-        st.markdown(
-            '<div class="amd-banner warning">'
-            '<span class="icon"><i class="ph-bold ph-warning-octagon"></i></span>'
-            '<span>Lemonade client is not available. Check connection.</span>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(actionable_connection_message(stage="client setup"))
         return
 
     # Worker + live-source tracking state
@@ -740,27 +832,19 @@ def _run_swarm(
             st.rerun()
 
         except ConnectionError as exc:
-            st.markdown(
-                f'<div class="amd-banner warning"><span class="icon"><i class="ph-bold ph-warning-octagon"></i></span>'
-                f"<span>{exc}</span></div>",
-                unsafe_allow_html=True,
-            )
+            # Friendly, actionable guidance only — never echo the raw error.
+            st.markdown(actionable_connection_message(exc, stage="swarm run"))
             status.update(label="Connection failed")
         except RuntimeError as exc:
             import sys; print(f"SWARM FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
             status.update(label=f"Failed: {type(exc).__name__}", state="error")
-            st.error(f"Error running swarm: {exc}")
+            st.error("The swarm run failed. " + actionable_connection_message(exc, stage="swarm run"))
         except Exception as exc:
             if type(exc).__name__ == "RerunException":
                 raise
             import sys; print(f"SWARM FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
-            status.update(label=f"Failed: {type(exc).__name__}", state="error")
-            st.markdown(
-                f'<div class="amd-banner warning"><span class="icon"><i class="ph-bold ph-warning-octagon"></i></span>'
-                f"<span>Unexpected error: {exc}</span></div>",
-                unsafe_allow_html=True,
-            )
-            status.update(label="Swarm failed")
+            status.update(label="Swarm failed", state="error")
+            st.markdown(actionable_connection_message(exc, stage="swarm run"))
 
 
 # ---------------------------------------------------------------------------

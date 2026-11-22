@@ -18,7 +18,14 @@ from swarmmind.core.hardware import (
 )
 from swarmmind.lemonade.client import LemonadeClient
 from swarmmind.ui.components.icons import icon_html, load_phosphor_css
-from swarmmind.ui.panels.chat import render_chat_panel
+from swarmmind.ui.panels.chat import (
+    _configured_source_count,
+    _inline_md,
+    actionable_connection_message,
+    onboarding_html,
+    onboarding_needed,
+    render_chat_panel,
+)
 from swarmmind.ui.panels.sources import render_sources_panel
 from swarmmind.ui.panels.studio import render_studio_panel
 
@@ -295,6 +302,32 @@ st.markdown(
         background: rgba(245, 158, 11, 0.1);
         border: 1px solid rgba(245, 158, 11, 0.3);
         color: #fcd34d;
+    }
+
+    /* First-run "Getting started" card — inline and non-blocking. */
+    .amd-banner.onboarding-card {
+        display: block;
+        background: rgba(59, 130, 246, 0.10);
+        border: 1px solid rgba(59, 130, 246, 0.3);
+        color: #dbeafe;
+        padding: 0.75rem 1rem;
+    }
+    .amd-banner.onboarding-card ol {
+        margin: 0.5rem 0 0.25rem;
+        padding-left: 1.4rem;
+    }
+    .amd-banner.onboarding-card li { margin: 0.25rem 0; }
+    .amd-banner.onboarding-card code {
+        font-family: 'JetBrains Mono', monospace;
+        background: rgba(0, 0, 0, 0.35);
+        border-radius: 4px;
+        padding: 0.05rem 0.3rem;
+        color: #c4b5fd;
+    }
+    .amd-banner.onboarding-card .onboarding-hint {
+        margin: 0.5rem 0 0;
+        font-style: italic;
+        opacity: 0.9;
     }
 
     /* ---------- Streamlit widget overrides ---------- */
@@ -679,6 +712,9 @@ if "studio_action" not in st.session_state:
 if "jump_to_sources" not in st.session_state:
     st.session_state.jump_to_sources = False
 
+if "onboarding_dismissed" not in st.session_state:
+    st.session_state.onboarding_dismissed = False
+
 if "hardware" not in st.session_state:
     st.session_state.hardware = None
 
@@ -784,7 +820,7 @@ if not is_ok:
     st.markdown(
         '<div class="amd-banner warning">'
         f'{icon_html("warning-octagon", "bold")}'
-        "<span>Cannot reach AMD Lemonade. Make sure the Lemonade server is running.</span>"
+        f"<span>{_inline_md(actionable_connection_message(stage='health check'))}</span>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -854,6 +890,27 @@ _state: dict[str, object] = {
     "hardware": hardware,
     "backend_recommendations": st.session_state.backend_recommendations,
 }
+
+# ---------------------------------------------------------------------------
+# First-run onboarding — inline card, never a modal or a barrier to the panels
+# ---------------------------------------------------------------------------
+
+if onboarding_needed(
+    connected=is_ok,
+    source_count=_configured_source_count(_state),
+    dismissed=bool(st.session_state.onboarding_dismissed),
+):
+    st.markdown(
+        '<div class="amd-banner onboarding-card" role="status" '
+        'aria-label="Getting started">'
+        "<strong>Getting started</strong>"
+        f"{onboarding_html()}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    if st.button("Dismiss getting started", key="onboarding_dismiss"):
+        st.session_state.onboarding_dismissed = True
+        st.rerun()
 
 # ---------------------------------------------------------------------------
 # 3-column layout

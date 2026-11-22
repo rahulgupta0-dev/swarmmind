@@ -498,3 +498,109 @@ def test_tts_availability_helper() -> None:
     assert tts_available(None) is False
     assert tts_available({"client": None}) is False
     assert tts_available({"client": object()}) is True
+
+
+# ---------------------------------------------------------------------------
+# First-run onboarding / actionable connection errors
+# ---------------------------------------------------------------------------
+
+
+def test_onboarding_text_contains_exact_commands_and_hint() -> None:
+    from swarmmind.ui.panels.chat import GETTING_STARTED_STEPS, onboarding_text
+
+    assert len(GETTING_STARTED_STEPS) == 3
+    text = onboarding_text()
+    assert "Getting started" in text
+    assert "1." in text and "2." in text and "3." in text
+    assert "lemonade-server start" in text
+    assert "python tests/mock_lemonade_server.py" in text
+    assert "Sources panel" in text
+    assert "YouTube" in text and "pasted text" in text
+    assert "Chat panel" in text and "[S#]" in text
+    assert "Run `swarmmind doctor` to diagnose setup" in text
+    assert "swarmmind doctor" not in onboarding_text(include_hint=False)
+
+
+def test_onboarding_html_is_compact_and_escaped() -> None:
+    from swarmmind.ui.panels.chat import onboarding_html
+
+    html = onboarding_html()
+    assert html.count("<li>") == 3
+    assert "<code>lemonade-server start</code>" in html
+    assert "<code>python tests/mock_lemonade_server.py</code>" in html
+    assert "onboarding-hint" in html
+    assert "onboarding-hint" not in onboarding_html(include_hint=False)
+
+
+def test_actionable_connection_message_has_commands_and_no_traceback() -> None:
+    from swarmmind.ui.panels.chat import actionable_connection_message
+
+    exc = RuntimeError("Traceback (most recent call last): secret stack details")
+    msg = actionable_connection_message(exc, stage="health check")
+    assert "health check" in msg
+    assert "lemonade-server start" in msg
+    assert "python tests/mock_lemonade_server.py" in msg
+    assert "docs/TROUBLESHOOTING.md" in msg
+    assert "Traceback" not in msg
+    assert "secret stack details" not in msg
+
+
+def test_onboarding_visibility_predicate() -> None:
+    from swarmmind.ui.panels.chat import onboarding_needed
+
+    assert onboarding_needed(connected=False, source_count=0, dismissed=False)
+    assert onboarding_needed(connected=True, source_count=0, dismissed=False)
+    assert onboarding_needed(connected=False, source_count=3, dismissed=False)
+    assert not onboarding_needed(connected=True, source_count=3, dismissed=False)
+    assert not onboarding_needed(connected=False, source_count=0, dismissed=True)
+
+
+def test_onboarding_empty_state_renders_only_when_chat_is_empty() -> None:
+    from swarmmind.ui.panels.chat import (
+        needs_onboarding_empty_state,
+        render_onboarding_empty_state,
+    )
+
+    state: dict[str, Any] = {"last_report": None, "conversation_history": []}
+    assert needs_onboarding_empty_state(state) is True
+    st = FakeSt()
+    assert render_onboarding_empty_state(st, state) is True
+    joined = "\n".join(st.markdowns)
+    assert "Getting started" in joined
+    assert "lemonade-server start" in joined
+    assert "swarmmind doctor" in joined
+
+    state["last_report"] = _report()
+    assert needs_onboarding_empty_state(state) is False
+    st2 = FakeSt()
+    assert render_onboarding_empty_state(st2, state) is False
+    assert st2.markdowns == []
+
+    state["last_report"] = None
+    state["conversation_history"] = [{"query": "prior question"}]
+    assert needs_onboarding_empty_state(state) is False
+
+
+def test_chat_panel_shows_getting_started_when_empty() -> None:
+    from swarmmind.ui.panels.chat import render_chat_panel
+
+    st = FakeSt()
+    state: dict[str, Any] = {
+        "config": None, "client": None, "db": None, "chroma": None,
+        "current_project": None, "conversation_history": [],
+        "last_report": None, "connection_status": "error", "hardware": None,
+        "saved_notes": [], "studio_action": None,
+    }
+    render_chat_panel(st, state)
+    joined = "\n".join(st.markdowns)
+    assert "Getting started" in joined
+    assert "lemonade-server start" in joined
+    assert "docs/TROUBLESHOOTING.md" not in joined  # guide card, not error banner
+
+
+def test_sources_caption_explains_grounding_and_paste_location() -> None:
+    from swarmmind.ui.panels.sources import SOURCE_HELP_CAPTION
+
+    assert "grounded" in SOURCE_HELP_CAPTION.lower()
+    assert "paste" in SOURCE_HELP_CAPTION.lower()
+    assert "Text" in SOURCE_HELP_CAPTION
