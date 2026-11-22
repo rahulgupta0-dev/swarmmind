@@ -8,9 +8,15 @@ from typing import Any, AsyncGenerator
 
 import httpx
 
+from swarmmind.config import ModelsConfig
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 60.0
+
+# Fresh defaults object used to resolve per-task model names.  Kept at module
+# scope (never mutated) so existing config files keep working without change.
+_DEFAULT_MODELS = ModelsConfig()
 
 
 class LemonadeClient:
@@ -193,23 +199,137 @@ class LemonadeClient:
         return data
 
     # ------------------------------------------------------------------
-    # Text-to-Speech
+    # Omni Model APIs (image, image edit, speech, transcription, vision)
     # ------------------------------------------------------------------
+
+    def is_omni_model(self, model_name: str) -> bool:
+        """Return ``True`` when *model_name* looks like an Omni collection.
+
+        Omni collections are recognised either by containing ``omni``
+        (case-insensitive) or by the ``LMX-Omni-`` naming prefix.  An empty
+        or missing name is never treated as an Omni model.
+        """
+        if not model_name:
+            return False
+        lowered = model_name.lower()
+        return "omni" in lowered or lowered.startswith("lmx-omni-")
+
+    def _resolve_model(self, model: str | None, default: str) -> str:
+        """Return *model* unchanged (including Omni names) or pick a default.
+
+        A configured ``models.omni`` collection takes precedence over the
+        per-task raw-component default when no explicit model is supplied.
+        """
+        if model:
+            return model
+        if _DEFAULT_MODELS.omni:
+            return _DEFAULT_MODELS.omni
+        return default
+
+    async def generate_image(
+        self,
+        prompt: str,
+        model: str | None = None,
+        size: str = "1024x1024",
+    ) -> dict:
+        """Generate an image from a text prompt via ``/v1/images/generations``.
+
+        Returns the parsed JSON response (URL or base64 data).  An Omni
+        collection name passed as *model* is forwarded unchanged.
+        """
+        body = {
+            "model": self._resolve_model(model, _DEFAULT_MODELS.image),
+            "prompt": prompt,
+            "size": size,
+        }
+        resp = await self._request("POST", "/v1/images/generations", json=body)
+        return resp.json()
+
+    async def edit_image(
+        self,
+        base64_image: str,
+        prompt: str,
+        model: str | None = None,
+    ) -> dict:
+        """Edit a base64-encoded image via ``/v1/images/edits``."""
+        body = {
+            "model": self._resolve_model(model, _DEFAULT_MODELS.image),
+            "image": base64_image,
+            "prompt": prompt,
+        }
+        resp = await self._request("POST", "/v1/images/edits", json=body)
+        return resp.json()
 
     async def text_to_speech(
         self,
-        model: str,
-        input_text: str,
-        voice: str = "default",
-        **kwargs: Any,
+        text: str,
+        model: str | None = None,
+        voice: str = "af",
     ) -> bytes:
-        """Convert text to speech audio.
+        """Convert *text* to speech via ``/v1/audio/speech``.
 
-        Returns raw binary audio data (usually WAV/MP3).
+        Returns raw binary audio data (usually WAV/MP3).  Defaults to the
+        configured TTS model, or the Omni collection when one is configured.
         """
-        body = {"model": model, "input": input_text, "voice": voice, **kwargs}
+        body = {
+            "model": self._resolve_model(model, _DEFAULT_MODELS.tts),
+            "input": text,
+            "voice": voice,
+        }
         resp = await self._request("POST", "/v1/audio/speech", json=body)
         return resp.content
+
+    async def transcribe_audio(
+        self,
+        audio_bytes: bytes,
+        model: str | None = None,
+    ) -> dict:
+        """Transcribe raw audio bytes via ``/v1/audio/transcriptions``.
+
+        Uses the OpenAI-compatible multipart upload shape.  Returns the
+        parsed JSON response (e.g. ``{"text": "..."}``).
+        """
+        resolved = self._resolve_model(model, _DEFAULT_MODELS.tts)
+        files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
+        resp = await self._request(
+            "POST",
+            "/v1/audio/transcriptions",
+            data={"model": resolved},
+            files=files,
+        )
+        return resp.json()
+
+    async def analyze_image(
+        self,
+        base64_image: str,
+        prompt: str,
+        model: str | None = None,
+    ) -> dict:
+        """Analyse a base64-encoded image with a vision-capable model.
+
+        Sends an OpenAI-compatible vision chat-completion request and
+        returns the parsed JSON response.
+        """
+        resolved = self._resolve_model(model, _DEFAULT_MODELS.omni or _DEFAULT_MODELS.image)
+        body = {
+            "model": resolved,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{base64_image}",
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+        resp = await self._request("POST", "/v1/chat/completions", json=body)
+        return resp.json()
 
     # ------------------------------------------------------------------
     # Classification (Lemonade Router / ONNX text classifier)

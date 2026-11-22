@@ -59,6 +59,9 @@ class ModelsConfig(BaseModel):
     image: str = "Flux-2-Klein-4B"
     tts: str = "kokoro-v1"
     router: str = "routing.router"
+    # Optional Omni collection name (e.g. "LMX-Omni-5.5B-Lite").  When set,
+    # the single Omni model can serve image, narration and vision tasks.
+    omni: str = ""
 
     # Per-role context window in tokens.  Defaults to 128K for LLM roles.
     # 128K preserves Qwen3.6's thinking capabilities (~262K native) while
@@ -114,6 +117,18 @@ class UiConfig(BaseModel):
     panel_layout: Literal["balanced", "wide", "compact"] = "balanced"
 
 
+class WebConfig(BaseModel):
+    """Web page fetching configuration.
+
+    All fields have defaults so existing config files (which carry no
+    ``[web]`` section) keep loading unchanged.
+    """
+
+    fetch_pages: bool = True
+    max_pages: int = 5
+    timeout_seconds: float = 5.0
+
+
 class Config(BaseSettings):
     """Top-level application configuration.
 
@@ -125,6 +140,7 @@ class Config(BaseSettings):
     models: ModelsConfig = ModelsConfig()
     execution: ExecutionConfig = ExecutionConfig()
     ui: UiConfig = UiConfig()
+    web: WebConfig = WebConfig()
 
     model_config = SettingsConfigDict(
         env_prefix="SWARMMIND_",
