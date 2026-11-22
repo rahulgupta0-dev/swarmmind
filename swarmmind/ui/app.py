@@ -535,7 +535,10 @@ def _load_config() -> Config:
 
 
 def _get_client(config: Config) -> LemonadeClient:
-    return LemonadeClient(config.get_lemonade_base_url())
+    return LemonadeClient(
+        config.get_lemonade_base_url(),
+        api_key=config.lemonade.api_key or None,
+    )
 
 
 _config = _load_config()

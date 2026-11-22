@@ -12,6 +12,7 @@ import asyncio
 import inspect
 from typing import Any
 
+import httpx
 import pytest
 
 
@@ -153,3 +154,154 @@ class TestLemonadeClientStreamingFixed:
         assert not isinstance(exc_info.value, AttributeError), (
             f"_stream_chat raised AttributeError (self._client bug): {exc_info.value}"
         )
+
+
+class TestLemonadeAuthHeaders:
+    """Lemonade v2026.47+ API-key support via environment variables."""
+
+    def test_auth_header_present_when_env_key_set(self, monkeypatch: Any) -> None:
+        from swarmmind.lemonade.client import LemonadeClient
+
+        monkeypatch.setenv("LEMONADE_API_KEY", "secret-key")
+        monkeypatch.delenv("LEMONADE_ADMIN_API_KEY", raising=False)
+
+        client = LemonadeClient("http://localhost:13305")
+        headers = client._make_client().headers
+        assert headers.get("Authorization") == "Bearer secret-key"
+
+    def test_auth_header_absent_when_no_env_key(self, monkeypatch: Any) -> None:
+        from swarmmind.lemonade.client import LemonadeClient
+
+        monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+        monkeypatch.delenv("LEMONADE_ADMIN_API_KEY", raising=False)
+
+        client = LemonadeClient("http://localhost:13305")
+        assert "Authorization" not in client._make_client().headers
+
+    def test_admin_key_fallback(self, monkeypatch: Any) -> None:
+        from swarmmind.lemonade.client import LemonadeClient
+
+        monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+        monkeypatch.setenv("LEMONADE_ADMIN_API_KEY", "admin-key")
+
+        client = LemonadeClient("http://localhost:13305")
+        assert client._make_client().headers.get("Authorization") == "Bearer admin-key"
+
+
+class TestLemonadeFriendlyErrors:
+    """Actionable HTTP 400 messages for missing-model / non-LLM errors."""
+
+    def _patch_400(self, monkeypatch: Any, error_body: str) -> None:
+        request = httpx.Request("POST", "http://localhost:13305/v1/chat/completions")
+        response = httpx.Response(400, json={"error": error_body}, request=request)
+
+        async def fake_request(self: Any, method: str, url: str, **kwargs: Any) -> Any:
+            raise httpx.HTTPStatusError(
+                "Client error 400", request=request, response=response,
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+
+    @pytest.mark.asyncio
+    async def test_friendly_missing_model_400(self, monkeypatch: Any) -> None:
+        from swarmmind.lemonade.client import LemonadeClient
+
+        self._patch_400(monkeypatch, "Missing model field in request")
+        client = LemonadeClient("http://localhost:13305")
+
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await client.chat_completion(
+                model="x", messages=[{"role": "user", "content": "hi"}],
+            )
+
+        message = str(exc_info.value)
+        assert "HTTP 400" in message
+        assert "Hint:" in message
+        assert "model" in message.lower()
+
+    @pytest.mark.asyncio
+    async def test_friendly_non_llm_400(self, monkeypatch: Any) -> None:
+        from swarmmind.lemonade.client import LemonadeClient
+
+        self._patch_400(monkeypatch, "Model my-embed is not an LLM")
+        client = LemonadeClient("http://localhost:13305")
+
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await client.chat_completion(
+                model="my-embed", messages=[{"role": "user", "content": "hi"}],
+            )
+
+        message = str(exc_info.value)
+        assert "not an LLM" in message
+        assert "Hint:" in message
+
+
+def test_version_is_0_4_0() -> None:
+    from swarmmind import __version__
+
+    assert __version__ == "0.4.0"
+
+
+class TestLemonadeConfigApiKey:
+    """Wiring of the optional config-file api_key (Lemonade v2026.47.1+)."""
+
+    def test_config_field_defaults_to_empty(self) -> None:
+        from swarmmind.config import Config, LemonadeConfig
+
+        assert LemonadeConfig().api_key == ""
+        assert Config().lemonade.api_key == ""
+
+    def test_config_api_key_reaches_client_and_all_call_sites(self, monkeypatch: Any) -> None:
+        from pathlib import Path
+
+        import swarmmind
+        from swarmmind.config import Config
+        from swarmmind.lemonade.client import LemonadeClient
+
+        monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+        monkeypatch.delenv("LEMONADE_ADMIN_API_KEY", raising=False)
+
+        config = Config()
+        config.lemonade.api_key = "config-secret"
+        client = LemonadeClient(
+            config.get_lemonade_base_url(),
+            api_key=config.lemonade.api_key or None,
+        )
+        assert client._make_client().headers.get("Authorization") == "Bearer config-secret"
+
+        # All three production construction sites must thread the config value.
+        pkg = Path(swarmmind.__file__).parent
+        for rel in ("cli/main.py", "ui/app.py", "benchmark.py"):
+            source = (pkg / rel).read_text(encoding="utf-8")
+            assert "api_key=config.lemonade.api_key or None" in source, (
+                f"{rel} does not thread config.lemonade.api_key"
+            )
+
+    def test_explicit_api_key_takes_precedence_over_env(self, monkeypatch: Any) -> None:
+        from swarmmind.lemonade.client import LemonadeClient
+
+        monkeypatch.setenv("LEMONADE_API_KEY", "env-key")
+        monkeypatch.delenv("LEMONADE_ADMIN_API_KEY", raising=False)
+
+        explicit = LemonadeClient("http://localhost:13305", api_key="explicit-key")
+        assert explicit._make_client().headers.get("Authorization") == "Bearer explicit-key"
+
+        # An empty/None explicit key still allows the env-var fallback.
+        fallback = LemonadeClient("http://localhost:13305", api_key=None)
+        assert fallback._make_client().headers.get("Authorization") == "Bearer env-key"
+
+    def test_no_auth_header_when_no_config_or_env_key(self, monkeypatch: Any) -> None:
+        from swarmmind.config import Config
+        from swarmmind.lemonade.client import LemonadeClient
+
+        monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+        monkeypatch.delenv("LEMONADE_ADMIN_API_KEY", raising=False)
+
+        config = Config()
+        assert config.lemonade.api_key == ""
+        client = LemonadeClient(
+            config.get_lemonade_base_url(),
+            api_key=config.lemonade.api_key or None,
+        )
+        assert "Authorization" not in client._make_client().headers
+

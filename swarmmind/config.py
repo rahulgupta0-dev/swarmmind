@@ -8,10 +8,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict, TomlConfigSettin
 
 
 class LemonadeConfig(BaseModel):
-    """AMD Lemonade endpoint configuration."""
+    """AMD Lemonade endpoint configuration.
+
+    ``api_key`` is the optional Bearer token for Lemonade v2026.47.1+, which
+    no longer lets an empty ``LEMONADE_ADMIN_API_KEY`` bypass authentication
+    and instead requires a valid key when auth is enabled.  When left empty
+    here the client falls back to the ``LEMONADE_API_KEY`` /
+    ``LEMONADE_ADMIN_API_KEY`` environment variables, so existing TOML files
+    (which carry no ``api_key`` key) keep loading unchanged.
+    """
 
     host: str = "localhost"
     port: int = 13305
+    api_key: str = ""
 
 
 class RagConfig(BaseModel):

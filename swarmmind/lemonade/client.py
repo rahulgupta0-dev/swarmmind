@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, AsyncGenerator
 
 import httpx
@@ -13,6 +14,15 @@ from swarmmind.config import ModelsConfig
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 60.0
+
+# Lemonade v2026.47+ can require an API key.  SwarmMind reads it from the
+# environment so no config fields (and no secrets in config.toml) are needed.
+# The regular key is preferred; the admin key is a fallback for local setups
+# where only the admin credential is exported.
+_API_KEY_ENV = "LEMONADE_API_KEY"
+_ADMIN_KEY_ENV = "LEMONADE_ADMIN_API_KEY"
+# Historical default that means "this server does not require auth".
+_NO_KEY_SENTINEL = "not-needed"
 
 # Fresh defaults object used to resolve per-task model names.  Kept at module
 # scope (never mutated) so existing config files keep working without change.
@@ -24,14 +34,17 @@ class LemonadeClient:
 
     Args:
         base_url: The Lemonade server base URL (e.g. ``http://localhost:13305``).
-        api_key: API key (Lemonade typically doesn't require one).
+        api_key: Explicit API key. A non-empty value (other than the legacy
+            ``"not-needed"`` sentinel) takes precedence over the
+            ``LEMONADE_API_KEY`` / ``LEMONADE_ADMIN_API_KEY`` environment
+            variables. Pass ``""`` or ``None`` to allow env-var fallback.
         timeout: Default request timeout in seconds.
     """
 
     def __init__(
         self,
         base_url: str,
-        api_key: str = "not-needed",
+        api_key: str | None = "not-needed",
         timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -39,8 +52,37 @@ class LemonadeClient:
         self._timeout = timeout
 
     # ------------------------------------------------------------------
-    # Internal: low-level request with graceful degradation
+    # Internal: auth + low-level request with graceful degradation
     # ------------------------------------------------------------------
+
+    def _resolved_api_key(self) -> str:
+        """Return the API key to send, or ``""`` when auth is not configured.
+
+        Precedence: an explicitly supplied, non-empty ``api_key`` argument ->
+        ``LEMONADE_API_KEY`` -> ``LEMONADE_ADMIN_API_KEY``.  This lets the
+        config-file (explicit) key win over environment variables, while an
+        empty/``None``/legacy ``"not-needed"`` value falls back to the env
+        vars.  When no source provides a key we return ``""`` so
+        unauthenticated Lemonade servers keep working exactly as before.
+        """
+        if self.api_key and self.api_key.strip() and self.api_key != _NO_KEY_SENTINEL:
+            return self.api_key.strip()
+        for env_name in (_API_KEY_ENV, _ADMIN_KEY_ENV):
+            value = os.environ.get(env_name, "").strip()
+            if value:
+                return value
+        return ""
+
+    def _auth_headers(self) -> dict[str, str]:
+        """Build auth headers only when a key is actually available.
+
+        Lemonade v2026.47+ expects ``Authorization: Bearer <key>``.  When
+        there is no key we send no Authorization header at all, which is
+        the correct (and backward-compatible) behaviour for servers with
+        authentication disabled.
+        """
+        key = self._resolved_api_key()
+        return {"Authorization": f"Bearer {key}"} if key else {}
 
     def _make_client(self) -> httpx.AsyncClient:
         """Create a configured ``httpx.AsyncClient`` for a single request.
@@ -51,7 +93,44 @@ class LemonadeClient:
         return httpx.AsyncClient(
             base_url=self.base_url,
             timeout=httpx.Timeout(self._timeout),
-            headers={"Authorization": f"Bearer {self.api_key}"},
+            headers=self._auth_headers(),
+        )
+
+    @staticmethod
+    def _friendly_400_message(text: str) -> str | None:
+        """Return an actionable hint for known HTTP 400 failure modes.
+
+        Lemonade's OpenAI-compatible endpoints reject a request with 400 when
+        the ``model`` field is absent or when the named model is not an LLM
+        (e.g. an embedding/Omni model sent to ``/v1/chat/completions``).
+        The raw server text is terse; give the user a next step instead.
+        """
+        lowered = text.lower()
+        missing_model = "missing model field" in lowered or "model field is required" in lowered
+        non_llm = any(
+            phrase in lowered
+            for phrase in (
+                "not an llm",
+                "non-llm",
+                "not a language model",
+                "does not support chat",
+                "does not support completion",
+                "cannot be used for chat",
+                "unsupported model",
+            )
+        )
+        if not (missing_model or non_llm):
+            return None
+
+        cause = "the request is missing its 'model' field" if missing_model else \
+            "the selected model is not an LLM/chat model"
+        return (
+            f"Lemonade rejected the request (HTTP 400): {cause}. "
+            "Hint: include a 'model' field in every request and point it at a "
+            "chat/LLM model (for example the configured conductor model). If "
+            "you meant to use an embedding, image or Omni model, call its "
+            "dedicated endpoint (e.g. /v1/embeddings or /v1/images/generations) "
+            "instead of /v1/chat/completions."
         )
 
     async def _request(
@@ -70,6 +149,16 @@ class LemonadeClient:
             return response
         except httpx.HTTPStatusError as exc:
             logger.error("HTTP error %s: %s", exc.response.status_code, exc.response.text)
+            if exc.response.status_code == 400:
+                hint = self._friendly_400_message(exc.response.text)
+                if hint:
+                    # Preserve the exception type and response for callers,
+                    # but replace the cryptic message with actionable text.
+                    raise httpx.HTTPStatusError(
+                        hint,
+                        request=exc.request,
+                        response=exc.response,
+                    ) from exc
             raise
         except httpx.RequestError as exc:
             logger.error("Request failed: %s", exc)

@@ -533,7 +533,10 @@ async def _benchmark_async(
 ) -> None:
     """Async entry point shared by the Click CLI and standalone runner."""
     config = Config()  # type: ignore[call-arg]
-    client = LemonadeClient(config.get_lemonade_base_url())
+    client = LemonadeClient(
+        config.get_lemonade_base_url(),
+        api_key=config.lemonade.api_key or None,
+    )
     try:
         from swarmmind.core.hardware import detect_hardware
 
