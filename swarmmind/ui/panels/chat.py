@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import html
+import inspect
 import json
 import re
 from datetime import datetime
@@ -718,7 +720,7 @@ def _render_action_buttons(
     report: dict[str, Any],
 ) -> None:
     """Render the action button row below a completed report."""
-    cols = st.columns(4)
+    cols = st.columns(5)
     with cols[0]:
         if st.button(
 	            "Save to Notes",
@@ -749,6 +751,117 @@ def _render_action_buttons(
             key="download_md_btn",
             use_container_width=True,
         )
+    with cols[4]:
+        if st.button(
+            "Read aloud",
+            key="read_aloud_btn",
+            use_container_width=True,
+        ):
+            _read_aloud_report(st, state, report)
+
+
+# ---------------------------------------------------------------------------
+# Read aloud — opt-in TTS via the local Lemonade server
+# ---------------------------------------------------------------------------
+
+
+def _report_read_aloud_text(report: dict[str, Any] | None) -> str:
+    """Flatten a report into plain prose suitable for text-to-speech.
+
+    Citation markers (``[S1]``) are removed so the narration does not read
+    them out loud. Output is capped to keep TTS requests reasonable.
+    """
+    if not isinstance(report, dict):
+        return ""
+    parts: list[str] = []
+    for key in ("title", "executive_summary"):
+        value = report.get(key, "")
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    for section in report.get("sections", []) or []:
+        if not isinstance(section, dict):
+            continue
+        for key in ("heading", "content"):
+            value = section.get(key, "")
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+    conclusion = report.get("conclusion", "")
+    if isinstance(conclusion, str) and conclusion.strip():
+        parts.append(conclusion.strip())
+    text = "\n\n".join(parts)
+    return _CITATION_MARKER_RE.sub("", text).strip()[:4000]
+
+
+def _tts_audio_bytes(result: Any) -> bytes:
+    """Normalise TTS output: raw bytes, or a base64 dict from older clients."""
+    if isinstance(result, (bytes, bytearray)):
+        return bytes(result)
+    if isinstance(result, dict):
+        encoded = result.get("b64_json") or result.get("audio")
+        data = result.get("data")
+        if not encoded and isinstance(data, list) and data:
+            encoded = data[0].get("b64_json") if isinstance(data[0], dict) else None
+        if isinstance(encoded, str):
+            try:
+                return base64.b64decode(encoded)
+            except Exception:
+                return b""
+    return b""
+
+
+def _audio_data_uri(audio_bytes: bytes) -> str:
+    """Build a base64 WAV/MP3 data URI for ``st.audio`` (no temp files)."""
+    if audio_bytes[:3] == b"ID3" or audio_bytes[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+        mime = "audio/mpeg"
+    else:
+        mime = "audio/wav"  # RIFF/WAVE header and any unknown binary default to WAV
+    encoded = base64.b64encode(audio_bytes).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def _read_aloud_report(
+    st: Any,
+    state: dict[str, Any] | None,
+    report: dict[str, Any] | None,
+) -> None:
+    """Speak the current report aloud using Lemonade's local TTS endpoint.
+
+    This is strictly opt-in (a button press) and stays inside the "100% local"
+    privacy story: audio is synthesised by the user's own Lemonade server, so
+    text never leaves the machine and no cloud TTS service is contacted.
+    """
+    state = state or {}
+    client = state.get("client")
+    if not client or not report:
+        st.warning("Read aloud needs a Lemonade connection and a report first.")
+        return
+
+    text = _report_read_aloud_text(report)
+    if not text:
+        st.warning("There is nothing in this report to read aloud.")
+        return
+
+    config_obj = state.get("config")
+    models = getattr(config_obj, "models", None)
+    model = getattr(models, "tts", None) or None
+
+    try:
+        result = client.text_to_speech(text=text, model=model, voice="af")
+        if inspect.isawaitable(result):
+            result = asyncio.run(result)
+    except Exception as exc:
+        st.warning(f"Read aloud is unavailable right now (local Lemonade TTS): {exc}")
+        return
+
+    audio_bytes = _tts_audio_bytes(result)
+    if not audio_bytes:
+        st.warning("Read aloud returned no audio data.")
+        return
+
+    st.audio(_audio_data_uri(audio_bytes))
+    st.caption(
+        "Read aloud runs on your local Lemonade server — nothing is sent to a cloud TTS service."
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from types import SimpleNamespace
 from typing import Any
 
@@ -329,3 +330,80 @@ def test_narration_uses_new_tts_signature(audio_payload: Any) -> None:
     assert calls[0]["model"] == "kokoro-v1"
     assert calls[0]["voice"] == "af"
     assert st.audios and isinstance(st.audios[0], bytes)
+
+
+# ---------------------------------------------------------------------------
+# Chat-panel "Read aloud" (local Lemonade TTS, base64 audio data URI)
+# ---------------------------------------------------------------------------
+
+
+class _FakeTtsClient:
+    """Minimal async client matching LemonadeClient.text_to_speech."""
+
+    def __init__(self, payload: bytes | Exception) -> None:
+        self.payload = payload
+        self.calls: list[dict[str, Any]] = []
+
+    async def text_to_speech(
+        self, text: str, model: str | None = None, voice: str = "af",
+    ) -> bytes:
+        self.calls.append({"text": text, "model": model, "voice": voice})
+        if isinstance(self.payload, Exception):
+            raise self.payload
+        return self.payload
+
+
+def _tts_state(client: Any) -> dict[str, Any]:
+    return {"client": client, "config": SimpleNamespace(models=SimpleNamespace(tts="kokoro-v1"))}
+
+
+def test_read_aloud_uses_local_tts_and_base64_wav_data_uri() -> None:
+    from swarmmind.ui.panels.chat import _read_aloud_report
+
+    wav = b"RIFF\x24\x00\x00\x00WAVEfake-audio-bytes"
+    client = _FakeTtsClient(wav)
+    st = FakeSt()
+    _read_aloud_report(st, _tts_state(client), _report())
+
+    assert len(client.calls) == 1
+    call = client.calls[0]
+    assert call["model"] == "kokoro-v1"
+    assert call["voice"] == "af"
+    assert "ROCm is open" in call["text"]
+    assert "[S1]" not in call["text"]  # citation markers are not spoken
+    assert len(st.audios) == 1
+    uri = st.audios[0]
+    assert uri.startswith("data:audio/wav;base64,")
+    assert base64.b64decode(uri.split(",", 1)[1]) == wav
+    assert "local Lemonade server" in "\n".join(st.markdowns)
+
+
+def test_read_aloud_detects_mp3_payload() -> None:
+    from swarmmind.ui.panels.chat import _read_aloud_report
+
+    mp3 = b"ID3\x03\x00\x00\x00fake-mp3-bytes"
+    st = FakeSt()
+    _read_aloud_report(st, _tts_state(_FakeTtsClient(mp3)), _report())
+    assert st.audios[0].startswith("data:audio/mpeg;base64,")
+
+
+def test_read_aloud_guards_missing_client_and_report() -> None:
+    from swarmmind.ui.panels.chat import _read_aloud_report
+
+    st = FakeSt()
+    _read_aloud_report(st, {"client": None, "config": None}, _report())
+    _read_aloud_report(st, _tts_state(_FakeTtsClient(b"RIFFfake")), None)
+    assert st.audios == []
+    assert "Lemonade connection and a report" in "\n".join(st.markdowns)
+
+
+def test_read_aloud_catches_client_errors_friendly() -> None:
+    from swarmmind.ui.panels.chat import _read_aloud_report
+
+    st = FakeSt()
+    client = _FakeTtsClient(RuntimeError("server busy"))
+    _read_aloud_report(st, _tts_state(client), _report())  # must not raise
+    assert st.audios == []
+    joined = "\n".join(st.markdowns)
+    assert "Read aloud is unavailable" in joined
+    assert "server busy" in joined
